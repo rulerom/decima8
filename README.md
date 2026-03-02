@@ -16,14 +16,6 @@
 | `tests/` | Core unit tests |
 | `examples/` | Usage examples |
 
-### ❌ IDE (Closed Source)
-
-| Component | Description |
-|-----------|----------|
-| `ide/` | Visual IDE: Accordion, SwarmView, Conductor, TapeDeck |
-| `deps/wui/` | GUI library (WUI) |
-| `res/` | IDE resources |
-
 ## Open Source Package Structure
 
 ```
@@ -148,9 +140,10 @@ IDE and visual components remain property of ORDEN (c) 2026.
 
 ## Contacts
 
-- GitHub: [repository link]
+- GitHub: https://github.com/rulerom/decima8
 - Documentation: `docs/`
-- Contract: `docs/CONTRACT_v02.md`
+- Contract: `docs/CONTRACT_en.md`
+- The Tome: [RuleRom Federation](https://rulerom.com)
 
 ---
 
