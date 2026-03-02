@@ -1,0 +1,42 @@
+# Build artifacts
+build/
+cmake-build-*/
+*.sln
+*.vcxproj*
+*.user
+*.props
+*.targets
+
+# Compiled files
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+
+# IDE files
+.vs/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Test artifacts
+Testing/
+CTestTestfile.cmake
+DartConfiguration.tcl
+
+# Dependencies (подключаются как submodule)
+deps/
