@@ -1,150 +1,171 @@
 # Decima-8 Core (Open Source)
 
-**Decima-8** is a neuromorphic engine implementing the "Island-Swarm" computing concept.
+Pure C implementation of Decima-8 neuromorphic core.
 
-## What's Included in Open Source Release
+## Overview
 
-### ✅ Core (Open Source)
-
-| Component | Description |
-|-----------|----------|
-| `include/d8/` | Core header files: `swarm_core.hpp`, `bake.hpp`, data types |
-| `src/swarm.cpp` | Swarm implementation (tile fabric, fuse-lock, activation) |
-| `src/bake.cpp` | Configuration system (Bake Blob, TLV format) |
-| `src/crc32_ieee.cpp` | CRC32 for Bake integrity verification |
-| `src/hw.rc` | Resources (icons, if any) |
-| `tests/` | Core unit tests |
-| `examples/` | Usage examples |
-
-## Open Source Package Structure
-
-```
-decima8-core/
-├── include/
-│   └── d8/
-│       ├── types.hpp        # Base types (u8, u16, u32, kLanes, kDomains)
-│       ├── swarm_core.hpp   # Main API: ev_flash, ev_bake, ev_reset_domain
-│       ├── bake.hpp         # Bake Blob structure and generation
-│       └── udp/
-│           └── packet_v1.hpp # UDP protocol for cascading
-├── src/
-│   ├── swarm.cpp            # Swarm implementation
-│   ├── bake.cpp             # Bake system
-│   ├── tlv.cpp              # TLV parser/serializer
-│   ├── crc32_ieee.cpp       # CRC32 IEEE
-│   └── hw.rc                # Resources
-├── tests/
-│   ├── test_main.cpp        # Test entry point
-│   ├── test_bake.cpp        # Bake system tests
-│   ├── test_swarm.cpp       # Swarm tests
-│   └── test_determinism.cpp # Determinism tests
-├── examples/
-│   ├── bake_roundtrip.cpp   # Example: bake generation and verification
-│   ├── ide_inprocess.cpp    # Example: IDE integration
-│   └── vsb_tape_gen.cpp     # Example: VSB tape generation
-├── docs/
-│   ├── CONTRACT_v02.md      # Interface specification (Contract)
-│   └── API.md               # API documentation
-├── CMakeLists.txt           # Build configuration
-└── LICENSE                  # License (MIT/Apache 2.0)
-```
-
-## Build Requirements
-
-- CMake 3.24+
-- C++23 compatible compiler (MSVC 2022, GCC 11+, Clang 14+)
-- spdlog (logging)
-
-## Building
-
-### Windows (MSVC)
-
-```bash
-mkdir build && cd build
-cmake .. -DD8_BUILD_TESTS=ON -DD8_BUILD_EXAMPLES=ON
-cmake --build . --config Release
-```
-
-### Linux (GCC)
-
-```bash
-mkdir build && cd build
-cmake .. -DD8_BUILD_TESTS=ON -DD8_BUILD_EXAMPLES=ON -DCMAKE_BUILD_TYPE=Release
-cmake --build .
-```
+Decima-8 is a neuromorphic computing core that simulates tile-based neural networks with:
+- Up to 4096 tiles (128x32 grid)
+- 8-lane VSB (Vector Signal Bus) interface
+- 16 domains with winner selection
+- Routing masks for inter-tile connections (N/E/S/W/NE/SE/SW/NW)
+- BUS read/write for signal propagation
+- Fuse-lock mechanism for pattern storage
 
 ## Quick Start
 
-### 1. Create Swarm
+### Build
 
-```cpp
-#include <d8/swarm_core.hpp>
-
-d8::swarm_core core;
-
-// Initialize (16x16 tile fabric = 256 tiles)
-core.init(d8::kTileCount);  // kTileCount = 256
+```bash
+mkdir build && cd build
+cmake ..
+cmake --build . --config Release
 ```
 
-### 2. Load Bake
+### Run Tests
 
-```cpp
-#include <d8/bake.hpp>
-
-// Generate test Bake Blob
-auto bake_blob = d8::ide_utils::generate_test_bake_blob();
-
-// Apply Bake
-auto status = core.ev_bake(bake_blob);
-if (status) {
-    std::cout << "Bake applied: " << status.msg << std::endl;
-}
+```bash
+cd build
+ctest
 ```
 
-### 3. Run Flash (Tick)
+### Run Examples
 
-```cpp
-// Set input vector (8 lanes, Level16 0..15)
-std::array<d8::u8, d8::kLanes> ingress = {0, 8, 3, 0, 0, 0, 0, 0};
-core.set_vsb_ingress(ingress);
+```bash
+cd build
 
-// Execute tick (READ → WRITE)
-auto readout = core.ev_flash();
+# Generate a custom bake
+./d8_example_bake_gen custom.d8p 4096 0 0 0
 
-// Read result
-std::cout << "BUS16: [";
-for (int i = 0; i < 8; ++i) {
-    std::cout << (int)readout.bus16[i] << ", ";
-}
-std::cout << "]" << std::endl;
+# Run simple flash example
+./d8_example_flash
+
+# Benchmark swarm performance
+./d8_swarm_bench tape.vsb bake.d8p
+
+# Benchmark bake generator
+./d8_bake_gen_bench
 ```
 
-## Contract v0.2
+## API
 
-Full specification available in `docs/CONTRACT_v02.md`.
+### Core Functions
 
-### Key Concepts
+```c
+#include "d8/swarm.h"
 
-- **Tile** — minimal programmable entity (8 inputs, 8 outputs, FUSE-LOCK)
-- **Level16** — value 0..15 (4 bits) on each lane
-- **READ/WRITE phases** — two-phase protocol (read first, then write)
-- **FUSE-LOCK** — tile locks if `thr_cur16 ∈ [thr_lo16..thr_hi16]`
-- **Decay-to-Zero** — accumulator pulls toward 0 if `decay16 > 0`
-- **BUS16** — shared 8-lane bus, honest summation of contributions
+// Create/destroy swarm
+d8_swarm_t* d8_swarm_create(void);
+void d8_swarm_destroy(d8_swarm_t* swarm);
+
+// Apply bake
+d8_status_t d8_swarm_ev_bake(d8_swarm_t* swarm, const uint8_t* blob, size_t size);
+
+// Run flash cycle
+d8_flash_result_t d8_swarm_ev_flash(d8_swarm_t* swarm, uint32_t tag, const uint8_t vsb[8]);
+
+// Get tile parameters
+d8_tile_params_t d8_swarm_get_tile_params(const d8_swarm_t* swarm, size_t tile_id);
+d8_tile_routing_masks_t d8_swarm_get_tile_routing_masks(const d8_swarm_t* swarm, size_t tile_id);
+
+// Set tile parameters
+d8_status_t d8_swarm_set_tile_params(d8_swarm_t* swarm, size_t tile_id,
+                                      int16_t thr_lo, int16_t thr_hi, uint16_t decay16,
+                                      uint8_t domain_id, uint8_t priority);
+```
+
+### Bake Generator
+
+```c
+#include "d8/bake_gen.h"
+
+// Generate test bake
+int d8_bake_gen_test(uint8_t* buffer, size_t* size);
+
+// Generate custom bake
+int d8_bake_gen_custom(uint8_t* buffer, size_t* size,
+                       uint32_t tile_count,
+                       int16_t thr_lo, int16_t thr_hi, uint16_t decay16);
+
+// Estimate size
+size_t d8_bake_gen_estimate_size(uint32_t tile_count);
+```
+
+## File Formats
+
+### D8P (Bake File)
+
+Binary format containing:
+- Header (28 bytes): Magic "D8BK", version, flags, bake_id, profile_id
+- TLV_TOPOLOGY: Tile grid configuration
+- TLV_TILE_PARAMS_V2: thr_lo, thr_hi, decay16, domain_id, etc.
+- TLV_TILE_ROUTING_FLAGS16: Connection masks
+- TLV_TILE_WEIGHTS_PACKED: Synaptic weights (packed nibbles/bits)
+- TLV_RESET_ON_FIRE_MASK16: Reset configuration
+- TLV_READOUT_POLICY: Output configuration
+- TLV_CRC32: Integrity check
+
+### VSB (Tape File)
+
+Raw binary file with 8-byte frames (one byte per lane).
+
+## Project Structure
+
+```
+opensource/
+├── include/d8/          # Public headers
+│   ├── swarm.h
+│   ├── swarm_core.h
+│   ├── bake.h
+│   └── types.h
+├── src/                 # Implementation
+│   ├── swarm.c
+│   ├── swarm_core.c
+│   ├── tlv.c
+│   └── crc32_ieee.c
+├── bake_gen/            # Bake generator
+│   ├── bake_gen.h
+│   └── bake_gen.c
+├── tests/               # Unit tests
+│   ├── test_flash.c
+│   └── test_bake_gen.c
+├── bench/               # Benchmarks
+│   ├── swarm_bench.c
+│   └── bake_gen_bench.c
+├── examples/            # Examples
+│   ├── simple_flash.c
+│   └── create_bake.c
+├── CMakeLists.txt
+└── README.md
+```
+
+## Integration
+
+### CMake
+
+```cmake
+add_subdirectory(decima8-core/opensource)
+target_link_libraries(your_target d8_core d8_bake_gen)
+```
+
+### Manual
+
+1. Add `include/` to your include paths
+2. Compile all `.c` files in `src/` and `bake_gen/`
+3. Link with your application
+
+## Performance
+
+Typical performance on modern hardware:
+- Flash cycle: 15-40 μs (25,000-65,000 FPS)
+- Bake generation: 50-100 MB/s
+- Memory usage: ~2 MB for 4096 tiles
 
 ## License
 
-Decima-8 Core is distributed under the **MIT License** (or Apache 2.0 — at author's discretion).
+Boost Software License - Version 1.0.
+(c) Decima-8 Core Team / Orden
 
-IDE and visual components remain property of ORDEN (c) 2026.
+## Contact
 
-## Contacts
-
-- GitHub: https://github.com/rulerom/decima8
-- Documentation: `docs/`
-- Contract: `docs/CONTRACT_en.md`
-- The Tome: [RuleRom Federation](https://rulerom.com)
-
----
-
-**ORDEN (c) 2026** | Decima-8 Core Team
+For questions and contributions, contact the [intent-garden](https://intent-garden.org)
