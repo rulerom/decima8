@@ -38,6 +38,11 @@ static inline int clock_gettime(int clk_id, struct timespec* ts) {
 #else
 #include <stdatomic.h>
 #include <time.h>
+
+/* CLOCK_MONOTONIC may not be defined on some systems */
+#ifndef CLOCK_MONOTONIC
+#define CLOCK_MONOTONIC CLOCK_REALTIME
+#endif
 #endif
 
 /* ============================================================================
