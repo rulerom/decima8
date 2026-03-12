@@ -38,10 +38,28 @@ static inline int clock_gettime(int clk_id, struct timespec* ts) {
 #else
 #include <stdatomic.h>
 #include <time.h>
+#include <sys/time.h>
 
-/* CLOCK_MONOTONIC may not be defined on some systems */
+/* Fallback for systems without clock_gettime */
+#if defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 199309L
+/* clock_gettime is available */
 #ifndef CLOCK_MONOTONIC
 #define CLOCK_MONOTONIC CLOCK_REALTIME
+#endif
+#else
+/* Use gettimeofday as fallback */
+#ifndef CLOCK_MONOTONIC
+#define CLOCK_MONOTONIC 0
+#endif
+
+static inline int clock_gettime(int clk_id, struct timespec* ts) {
+    (void)clk_id;
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    ts->tv_sec = tv.tv_sec;
+    ts->tv_nsec = tv.tv_usec * 1000;
+    return 0;
+}
 #endif
 #endif
 
