@@ -15,9 +15,6 @@
 #ifdef _WIN32
 #include <intrin.h>
 #include <windows.h>
-#else
-#include <stdatomic.h>
-#endif
 
 /* POSIX timers emulation for Windows */
 #ifndef CLOCK_MONOTONIC
@@ -38,6 +35,10 @@ static inline int clock_gettime(int clk_id, struct timespec* ts) {
     ts->tv_nsec = (long)((count.QuadPart % freq.QuadPart) * 1000000000 / freq.QuadPart);
     return 0;
 }
+#else
+#include <stdatomic.h>
+#include <time.h>
+#endif
 
 /* ============================================================================
  * Internal structures (expanded for flash)
