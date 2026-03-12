@@ -119,27 +119,12 @@ d8_status_t d8_swarm_core_serialize_bake(const d8_swarm_core_t* core,
         return D8_STATUS_MAKE(D8_STATUS_BAKE_NO_BLOB, 0, "NULL pointer");
     }
 
-    if (!core->is_baked) {
+    if (!core->is_baked || !core->swarm) {
         return D8_STATUS_MAKE(D8_STATUS_NOT_BAKED, 0, "Not baked");
     }
 
-    /* Estimate size */
-    size_t est_size = d8_bake_estimate_serialized_size(core->bake_view->tile_count);
-    *out_blob = (d8_u8*)malloc(est_size);
-    if (!*out_blob) {
-        return D8_STATUS_MAKE(D8_STATUS_BAKE_NO_BLOB, 0, "Memory allocation failed");
-    }
-
-    /* Serialize */
-    d8_status_t st = d8_bake_serialize_canonical(core->bake_view, *out_blob, out_size);
-    if (!d8_status_is_ok(&st)) {
-        free(*out_blob);
-        *out_blob = NULL;
-        *out_size = 0;
-        return st;
-    }
-
-    return D8_STATUS_MAKE(D8_STATUS_OK, 0, "OK");
+    /* Use swarm serialization directly */
+    return d8_swarm_serialize_current_bake(core->swarm, out_blob, out_size);
 }
 
 void d8_swarm_core_free_bake_blob(d8_u8* blob) {

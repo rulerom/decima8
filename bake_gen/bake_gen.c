@@ -115,11 +115,12 @@ size_t d8_bake_gen_estimate_size(uint32_t tile_count) {
     size_t reset_raw = 8 + (tile_count * D8_SZ_RESET_ON_FIRE_MASK16);
     size_t reset_on_fire_size = (reset_raw + 3) & ~3;  /* pad to 4 */
     size_t readout_size = 8 + 12;  /* 20, already aligned */
+    size_t field_limit_size = 8 + 4;  /* 12, already aligned */
     size_t crc_size = 8 + 4;  /* 12, already aligned */
 
     return header_size + topology_size + tile_params_size +
            routing_size + weights_size + reset_on_fire_size +
-           readout_size + crc_size;
+           readout_size + field_limit_size + crc_size;
 }
 
 int d8_bake_gen_test(uint8_t* out_buffer, size_t* out_size) {
@@ -170,7 +171,7 @@ int d8_bake_gen_custom(
     out_buffer[offset++] = D8_K_LANES;
     out_buffer[offset++] = D8_K_DOMAINS;
     write_le_u16(out_buffer + offset, 0); offset += 2;  /* reserved */
-    write_le_u32(out_buffer + offset, 0); offset += 4;  /* reserved2 = 0 */
+    write_le_u32(out_buffer + offset, tile_count); offset += 4;  /* reserved2 = tile_field_limit */
     
     /* ========== TLV_TILE_PARAMS_V2 ========== */
     size_t params_len = tile_count * D8_SZ_TILE_PARAMS_V2;
@@ -262,6 +263,12 @@ int d8_bake_gen_custom(
     while (offset % 4 != 0) {
         out_buffer[offset++] = 0;
     }
+
+    /* ========== TLV_TILE_FIELD_LIMIT ========== */
+    write_le_u16(out_buffer + offset, D8_TLV_TILE_FIELD_LIMIT); offset += 2;
+    write_le_u16(out_buffer + offset, 0); offset += 2;
+    write_le_u32(out_buffer + offset, 4); offset += 4;
+    write_le_u32(out_buffer + offset, tile_count); offset += 4;  /* tile_field_limit */
 
     /* Write total_len BEFORE CRC (total_len is part of CRC calculation) */
     /* total_len = full blob size including CRC TLV (12 bytes) */

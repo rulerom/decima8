@@ -13,6 +13,32 @@
 extern "C" {
 #endif
 
+/* TLV Types (v0.2) */
+#ifndef D8_TLV_TOPOLOGY
+#define D8_TLV_TOPOLOGY             0x0100U
+#endif
+#ifndef D8_TLV_TILE_PARAMS_V2
+#define D8_TLV_TILE_PARAMS_V2       0x0121U
+#endif
+#ifndef D8_TLV_TILE_ROUTING_FLAGS16
+#define D8_TLV_TILE_ROUTING_FLAGS16 0x0131U
+#endif
+#ifndef D8_TLV_READOUT_POLICY
+#define D8_TLV_READOUT_POLICY       0x0140U
+#endif
+#ifndef D8_TLV_RESET_ON_FIRE_MASK16
+#define D8_TLV_RESET_ON_FIRE_MASK16 0x0150U
+#endif
+#ifndef D8_TLV_TILE_WEIGHTS_PACKED
+#define D8_TLV_TILE_WEIGHTS_PACKED  0x0160U
+#endif
+#ifndef D8_TLV_TILE_FIELD_LIMIT
+#define D8_TLV_TILE_FIELD_LIMIT     0x0170U
+#endif
+#ifndef D8_TLV_CRC32
+#define D8_TLV_CRC32                0xFFFEU
+#endif
+
 /* ============================================================================
  * Bake view structures (for serialization)
  * ============================================================================ */

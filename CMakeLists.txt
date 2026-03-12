@@ -36,6 +36,7 @@ endif()
 # -------- Core Library --------
 add_library(d8_core STATIC
   src/swarm.c
+  src/swarm_core.c
   src/tlv.c
   src/crc32_ieee.c
 )
@@ -58,17 +59,23 @@ target_include_directories(d8_bake_gen PUBLIC
 # -------- Tests --------
 if (D8_BUILD_TESTS)
   enable_testing()
-  
+
   # Simple flash test
   add_executable(d8_test_flash tests/test_flash.c)
   target_link_libraries(d8_test_flash d8_core d8_bake_gen)
   target_include_directories(d8_test_flash PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/bake_gen)
   add_test(NAME flash_test COMMAND d8_test_flash)
-  
+
   # Bake generator test
   add_executable(d8_test_bake_gen tests/test_bake_gen.c)
   target_link_libraries(d8_test_bake_gen d8_bake_gen)
   add_test(NAME bake_gen_test COMMAND d8_test_bake_gen)
+
+  # Small swarm serialization test
+  add_executable(d8_test_small_swarm tests/test_small_swarm_serialization.c)
+  target_link_libraries(d8_test_small_swarm d8_core d8_bake_gen d8_bake)
+  target_include_directories(d8_test_small_swarm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/bake_gen)
+  add_test(NAME small_swarm_test COMMAND d8_test_small_swarm)
 endif()
 
 # -------- Benchmarks --------

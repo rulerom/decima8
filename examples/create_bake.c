@@ -14,7 +14,7 @@
 
 int main(int argc, char** argv) {
     const char* output_file = "custom_bake.d8p";
-    uint32_t tile_count = 4096;
+    uint32_t tile_count = 256;
     int16_t thr_lo = 0;
     int16_t thr_hi = 0;
     uint16_t decay16 = 0;

@@ -75,10 +75,13 @@ static d8_status_t parse_topology(const d8_u8* data, size_t len, d8_topology_t* 
     if (out->lanes != D8_K_LANES || out->domains != D8_K_DOMAINS) {
         return D8_STATUS_MAKE(D8_STATUS_TOPOLOGY_MISMATCH, 0, "Bad lanes/domains");
     }
-    
-    if (out->reserved != 0 || out->reserved2 != 0) {
+
+    /* Validate reserved (bytes 10-11) must be 0 */
+    if (out->reserved != 0) {
         return D8_STATUS_MAKE(D8_STATUS_BAKE_RESERVED_NON_ZERO, 0, "TOPOLOGY reserved must be 0");
     }
+
+    /* reserved2 (tile_field_limit) is allowed to be non-zero */
 
     return D8_STATUS_MAKE(D8_STATUS_OK, 0, "OK");
 }
@@ -453,12 +456,15 @@ size_t d8_bake_estimate_serialized_size(size_t tile_count) {
     
     size_t readout_raw = 8 + 12;
     size_t readout_size = (readout_raw + 3) & ~3;  /* 20, already aligned */
-    
+
+    size_t field_limit_raw = 8 + 4;
+    size_t field_limit_size = (field_limit_raw + 3) & ~3;  /* 12, already aligned */
+
     size_t crc_raw = 8 + 4;
     size_t crc_size = (crc_raw + 3) & ~3;  /* 12, already aligned */
-    
-    return header_size + topo_size + params_size + routing_size + 
-           weights_size + reset_size + readout_size + crc_size;
+
+    return header_size + topo_size + params_size + routing_size +
+           weights_size + reset_size + readout_size + field_limit_size + crc_size;
 }
 
 #ifdef __cplusplus

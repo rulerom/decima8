@@ -60,6 +60,9 @@ extern "C" {
 #ifndef D8_TLV_TILE_WEIGHTS_PACKED
 #define D8_TLV_TILE_WEIGHTS_PACKED  0x0160U
 #endif
+#ifndef D8_TLV_TILE_FIELD_LIMIT
+#define D8_TLV_TILE_FIELD_LIMIT     0x0170U
+#endif
 #ifndef D8_TLV_CRC32
 #define D8_TLV_CRC32                0xFFFEU
 #endif

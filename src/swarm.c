@@ -72,7 +72,11 @@ struct d8_swarm {
     /* Runtime state */
     d8_i16  thr_cur[D8_K_TILE_COUNT];
     d8_u8   locked[D8_K_TILE_COUNT];
-    
+
+    /* Cached activation flags (reset each flash cycle) */
+    d8_u8   bus_r_allowed[D8_K_TILE_COUNT];  /* Can receive VSB from parent */
+    d8_u8   bus_w_allowed[D8_K_TILE_COUNT];  /* Can write to BUS */
+
     /* Topology */
     d8_topology_t topo;
     d8_readout_policy_t readout;
@@ -398,80 +402,101 @@ static d8_flash_result_t flash_impl(d8_swarm_t* swarm, d8_u32 tag, const d8_u8* 
     memset(swarm->snapshot.in_clip_bits, 0, sizeof(swarm->snapshot.in_clip_bits));
     
     /* ===================================================================
-     * PHASE 1: PHASE_READ
+     * PHASE 1: PHASE_READ - OPTIMIZED MULTI-PASS ACTIVATION
      * =================================================================== */
-    
-    /* ACTIVE closure: seed by BUS_R, propagate by locked_before */
+
+    /* Reset cached activation flags */
+    memset(swarm->bus_r_allowed, 0, swarm->active_tile_count);
+    memset(swarm->bus_w_allowed, 0, swarm->active_tile_count);
     memset(swarm->active, 0, sizeof(swarm->active));
 
-    /* Seed: tiles with BUS_R set */
+    /* Seed: tiles with BUS_R set from bake */
     for (size_t t = 0; t < swarm->active_tile_count; t++) {
         if (swarm->bus_r[t]) {
+            swarm->bus_r_allowed[t] = 1;
             swarm->active[t] = 1;
         }
     }
-        
-    /* Propagate: if parent is locked, child becomes active */
-    /* A tile becomes active if any of its neighbors has a routing mask pointing TO this tile AND is locked */
+
+    /* Multi-pass propagation: locked tiles activate their children directly */
+    /* Repeat until no new activations (typically 2-4 passes for deep chains) */
     bool changed = true;
     while (changed) {
         changed = false;
+        size_t tile_w = swarm->active_tile_w;
+        
         for (size_t t = 0; t < swarm->active_tile_count; t++) {
-            if (swarm->active[t]) continue;
+            /* Skip if not active or not locked */
+            if (!swarm->active[t] || !swarm->locked[t]) continue;
 
-            /* Check all 8 neighbors for edge + locked */
-            bool has_locked_parent = false;
-            
-            size_t tile_w = swarm->topo.tile_w;
-            
-            /* North neighbor (t - tile_w) with maskS -> signal comes TO t from north */
-            if (t >= tile_w) {
-                size_t n = t - tile_w;
-                if (swarm->maskS[n] && swarm->locked[n]) has_locked_parent = true;
+            /* Activate children directly based on routing masks */
+            /* East child */
+            if (swarm->maskE[t] && (t % tile_w) < tile_w - 1 && t + 1 < swarm->active_tile_count) {
+                if (!swarm->active[t + 1]) {
+                    swarm->bus_r_allowed[t + 1] = 1;
+                    swarm->active[t + 1] = 1;
+                    changed = true;
+                }
             }
-            /* South neighbor (t + tile_w) with maskN -> signal comes TO t from south */
-            if (t + tile_w < swarm->active_tile_count) {
-                size_t s = t + tile_w;
-                if (swarm->maskN[s] && swarm->locked[s]) has_locked_parent = true;
+            /* West child */
+            if (swarm->maskW[t] && (t % tile_w) > 0) {
+                if (!swarm->active[t - 1]) {
+                    swarm->bus_r_allowed[t - 1] = 1;
+                    swarm->active[t - 1] = 1;
+                    changed = true;
+                }
             }
-            /* West neighbor (t - 1) with maskE -> signal comes TO t from west */
-            if ((t % tile_w) > 0) {
-                size_t w = t - 1;
-                if (swarm->maskE[w] && swarm->locked[w]) has_locked_parent = true;
+            /* South child */
+            if (swarm->maskS[t] && t + tile_w < swarm->active_tile_count) {
+                if (!swarm->active[t + tile_w]) {
+                    swarm->bus_r_allowed[t + tile_w] = 1;
+                    swarm->active[t + tile_w] = 1;
+                    changed = true;
+                }
             }
-            /* East neighbor (t + 1) with maskW -> signal comes TO t from east */
-            if ((t % tile_w) < tile_w - 1 && t + 1 < swarm->active_tile_count) {
-                size_t e = t + 1;
-                if (swarm->maskW[e] && swarm->locked[e]) has_locked_parent = true;
+            /* North child */
+            if (swarm->maskN[t] && t >= tile_w) {
+                if (!swarm->active[t - tile_w]) {
+                    swarm->bus_r_allowed[t - tile_w] = 1;
+                    swarm->active[t - tile_w] = 1;
+                    changed = true;
+                }
             }
-            /* NW neighbor (t - tile_w - 1) with maskSE -> signal comes TO t from NW */
-            if (t >= tile_w && (t % tile_w) > 0) {
-                size_t nw = t - tile_w - 1;
-                if (swarm->maskSE[nw] && swarm->locked[nw]) has_locked_parent = true;
+            /* SE child */
+            if (swarm->maskSE[t] && (t % tile_w) < tile_w - 1 && t + tile_w + 1 < swarm->active_tile_count) {
+                if (!swarm->active[t + tile_w + 1]) {
+                    swarm->bus_r_allowed[t + tile_w + 1] = 1;
+                    swarm->active[t + tile_w + 1] = 1;
+                    changed = true;
+                }
             }
-            /* NE neighbor (t - tile_w + 1) with maskSW -> signal comes TO t from NE */
-            if (t >= tile_w && (t % tile_w) < tile_w - 1 && t - tile_w + 1 < swarm->active_tile_count) {
-                size_t ne = t - tile_w + 1;
-                if (swarm->maskSW[ne] && swarm->locked[ne]) has_locked_parent = true;
+            /* SW child */
+            if (swarm->maskSW[t] && (t % tile_w) > 0 && t + tile_w - 1 < swarm->active_tile_count) {
+                if (!swarm->active[t + tile_w - 1]) {
+                    swarm->bus_r_allowed[t + tile_w - 1] = 1;
+                    swarm->active[t + tile_w - 1] = 1;
+                    changed = true;
+                }
             }
-            /* SW neighbor (t + tile_w - 1) with maskNE -> signal comes TO t from SW */
-            if (t + tile_w < swarm->active_tile_count && (t % tile_w) > 0) {
-                size_t sw = t + tile_w - 1;
-                if (swarm->maskNE[sw] && swarm->locked[sw]) has_locked_parent = true;
+            /* NE child */
+            if (swarm->maskNE[t] && (t % tile_w) < tile_w - 1 && t - tile_w + 1 < swarm->active_tile_count) {
+                if (!swarm->active[t - tile_w + 1]) {
+                    swarm->bus_r_allowed[t - tile_w + 1] = 1;
+                    swarm->active[t - tile_w + 1] = 1;
+                    changed = true;
+                }
             }
-            /* SE neighbor (t + tile_w + 1) with maskNW -> signal comes TO t from SE */
-            if (t + tile_w < swarm->active_tile_count && (t % tile_w) < tile_w - 1 && t + tile_w + 1 < swarm->active_tile_count) {
-                size_t se = t + tile_w + 1;
-                if (swarm->maskNW[se] && swarm->locked[se]) has_locked_parent = true;
-            }
-
-            if (has_locked_parent) {
-                swarm->active[t] = 1;
-                changed = true;
+            /* NW child */
+            if (swarm->maskNW[t] && (t % tile_w) > 0 && t >= tile_w) {
+                if (!swarm->active[t - tile_w - 1]) {
+                    swarm->bus_r_allowed[t - tile_w - 1] = 1;
+                    swarm->active[t - tile_w - 1] = 1;
+                    changed = true;
+                }
             }
         }
     }
-    
+
     /* Take snapshot of locked_before */
     for (size_t t = 0; t < swarm->active_tile_count; t++) {
         swarm->locked_before[t] = swarm->locked[t];
@@ -517,7 +542,7 @@ static d8_flash_result_t flash_impl(d8_swarm_t* swarm, d8_u32 tag, const d8_u8* 
             }
             
             swarm->thr_cur[t] = thr;
-            
+
             /* Check if this tile should unlock (thr_cur fell below thr_lo) */
             d8_i16 thr_lo = swarm->thr_lo[t];
             d8_i16 thr_hi = swarm->thr_hi[t];
@@ -530,54 +555,10 @@ static d8_flash_result_t flash_impl(d8_swarm_t* swarm, d8_u32 tag, const d8_u8* 
                 continue;
             }
 
-            /* Check if this tile still has a locked/active parent */
+            /* Check if this tile has bus_r_allowed (from parent or bake) */
             /* If not, unlock this tile (cascade unlock) */
-            bool has_locked_parent = false;
-            size_t tile_w = swarm->topo.tile_w;
-
-            /* North neighbor (t - tile_w) with maskS */
-            if (t >= tile_w) {
-                size_t n = t - tile_w;
-                if (swarm->maskS[n] && swarm->locked_before[n]) has_locked_parent = true;
-            }
-            /* South neighbor (t + tile_w) with maskN */
-            if (t + tile_w < swarm->active_tile_count) {
-                size_t s = t + tile_w;
-                if (swarm->maskN[s] && swarm->locked_before[s]) has_locked_parent = true;
-            }
-            /* West neighbor (t - 1) with maskE */
-            if ((t % tile_w) > 0) {
-                size_t w = t - 1;
-                if (swarm->maskE[w] && swarm->locked_before[w]) has_locked_parent = true;
-            }
-            /* East neighbor (t + 1) with maskW */
-            if ((t % tile_w) < tile_w - 1 && t + 1 < swarm->active_tile_count) {
-                size_t e = t + 1;
-                if (swarm->maskW[e] && swarm->locked_before[e]) has_locked_parent = true;
-            }
-            /* NW neighbor (t - tile_w - 1) with maskSE */
-            if (t >= tile_w && (t % tile_w) > 0) {
-                size_t nw = t - tile_w - 1;
-                if (swarm->maskSE[nw] && swarm->locked_before[nw]) has_locked_parent = true;
-            }
-            /* NE neighbor (t - tile_w + 1) with maskSW */
-            if (t >= tile_w && (t % tile_w) < tile_w - 1 && t - tile_w + 1 < swarm->active_tile_count) {
-                size_t ne = t - tile_w + 1;
-                if (swarm->maskSW[ne] && swarm->locked_before[ne]) has_locked_parent = true;
-            }
-            /* SW neighbor (t + tile_w - 1) with maskNE */
-            if (t + tile_w < swarm->active_tile_count && (t % tile_w) > 0) {
-                size_t sw = t + tile_w - 1;
-                if (swarm->maskNE[sw] && swarm->locked_before[sw]) has_locked_parent = true;
-            }
-            /* SE neighbor (t + tile_w + 1) with maskNW */
-            if (t + tile_w < swarm->active_tile_count && (t % tile_w) < tile_w - 1 && t + tile_w + 1 < swarm->active_tile_count) {
-                size_t se = t + tile_w + 1;
-                if (swarm->maskNW[se] && swarm->locked_before[se]) has_locked_parent = true;
-            }
-
-            if (!has_locked_parent) {
-                /* Cascade unlock - but NOT for seed tiles (bus_r=1) */
+            if (!swarm->bus_r_allowed[t]) {
+                /* Cascade unlock - but NOT for seed tiles (bus_r=1 from bake) */
                 if (!swarm->bus_r[t]) {
                     swarm->locked[t] = 0;
                 }
@@ -654,72 +635,6 @@ static d8_flash_result_t flash_impl(d8_swarm_t* swarm, d8_u32 tag, const d8_u8* 
         for (int i = 0; i < 8; i++) {
             drive_vec[i] = swarm->locked[t] ? in16_ptr[i] : row_out_ptr[i];
             bus_raw[i] += drive_vec[i];
-        }
-    }
-
-    /* ===================================================================
-     * CASCADE UNLOCK - second pass
-     * After all tiles processed, check if any locked tile lost its parent
-     * Use current locked[] values (already updated by first pass)
-     * =================================================================== */
-    bool cascade_changed = true;
-    while (cascade_changed) {
-        cascade_changed = false;
-        for (size_t t = 0; t < swarm->active_tile_count; t++) {
-            if (!swarm->locked[t]) continue;
-
-            /* Skip seed tiles (bus_r=1) - they don't need parents */
-            if (swarm->bus_r[t]) continue;
-
-            /* Check if this tile has a locked parent (use current locked[], not locked_before) */
-            bool has_locked_parent = false;
-            size_t tile_w = swarm->topo.tile_w;
-
-            /* North neighbor (t - tile_w) with maskS */
-            if (t >= tile_w) {
-                size_t n = t - tile_w;
-                if (swarm->maskS[n] && swarm->locked[n]) has_locked_parent = true;
-            }
-            /* South neighbor (t + tile_w) with maskN */
-            if (t + tile_w < swarm->active_tile_count) {
-                size_t s = t + tile_w;
-                if (swarm->maskN[s] && swarm->locked[s]) has_locked_parent = true;
-            }
-            /* West neighbor (t - 1) with maskE */
-            if ((t % tile_w) > 0) {
-                size_t w = t - 1;
-                if (swarm->maskE[w] && swarm->locked[w]) has_locked_parent = true;
-            }
-            /* East neighbor (t + 1) with maskW */
-            if ((t % tile_w) < tile_w - 1 && t + 1 < swarm->active_tile_count) {
-                size_t e = t + 1;
-                if (swarm->maskW[e] && swarm->locked[e]) has_locked_parent = true;
-            }
-            /* NW neighbor (t - tile_w - 1) with maskSE */
-            if (t >= tile_w && (t % tile_w) > 0) {
-                size_t nw = t - tile_w - 1;
-                if (swarm->maskSE[nw] && swarm->locked[nw]) has_locked_parent = true;
-            }
-            /* NE neighbor (t - tile_w + 1) with maskSW */
-            if (t >= tile_w && (t % tile_w) < tile_w - 1 && t - tile_w + 1 < swarm->active_tile_count) {
-                size_t ne = t - tile_w + 1;
-                if (swarm->maskSW[ne] && swarm->locked[ne]) has_locked_parent = true;
-            }
-            /* SW neighbor (t + tile_w - 1) with maskNE */
-            if (t + tile_w < swarm->active_tile_count && (t % tile_w) > 0) {
-                size_t sw = t + tile_w - 1;
-                if (swarm->maskNE[sw] && swarm->locked[sw]) has_locked_parent = true;
-            }
-            /* SE neighbor (t + tile_w + 1) with maskNW */
-            if (t + tile_w < swarm->active_tile_count && (t % tile_w) < tile_w - 1 && t + tile_w + 1 < swarm->active_tile_count) {
-                size_t se = t + tile_w + 1;
-                if (swarm->maskNW[se] && swarm->locked[se]) has_locked_parent = true;
-            }
-
-            if (!has_locked_parent) {
-                swarm->locked[t] = 0;
-                cascade_changed = true;
-            }
         }
     }
 
@@ -922,9 +837,7 @@ d8_status_t d8_swarm_ev_bake(d8_swarm_t* swarm, const d8_u8* blob, size_t blob_s
 
     /* Apply topology */
     swarm->topo = view->topo;
-    swarm->active_tile_w = view->topo.tile_w;
-    swarm->active_tile_h = view->topo.tile_h;
-
+    
     /* Restore active_tile_count from tile_field_limit or tile_count */
     if (view->tile_field_limit > 0 && view->tile_field_limit <= D8_K_TILE_COUNT) {
         swarm->active_tile_count = view->tile_field_limit;
@@ -932,6 +845,26 @@ d8_status_t d8_swarm_ev_bake(d8_swarm_t* swarm, const d8_u8* blob, size_t blob_s
         swarm->active_tile_count = view->topo.reserved2;
     } else {
         swarm->active_tile_count = view->tile_count;
+    }
+    
+    /* Compute active_tile_w and active_tile_h from active_tile_count */
+    /* Use the same logic as IDE's compute_active_dims */
+    if (swarm->active_tile_count == 0 || swarm->active_tile_count == D8_K_TILE_COUNT) {
+        swarm->active_tile_w = D8_K_EXPECTED_W;  /* 128 */
+        swarm->active_tile_h = D8_K_EXPECTED_H;  /* 32 */
+    } else {
+        switch (swarm->active_tile_count) {
+        case 256:  swarm->active_tile_w = 32;  swarm->active_tile_h = 8;  break;
+        case 512:  swarm->active_tile_w = 32;  swarm->active_tile_h = 16; break;
+        case 1024: swarm->active_tile_w = 64;  swarm->active_tile_h = 16; break;
+        case 2048: swarm->active_tile_w = 64;  swarm->active_tile_h = 32; break;
+        case 4096: swarm->active_tile_w = 128; swarm->active_tile_h = 32; break;
+        default:
+            /* Fallback: use topology from file */
+            swarm->active_tile_w = view->topo.tile_w;
+            swarm->active_tile_h = view->topo.tile_h;
+            break;
+        }
     }
 
     /* Apply tile parameters */
@@ -1210,15 +1143,34 @@ void d8_swarm_set_tile_pattern_id_direct(d8_swarm_t* swarm, size_t tile_id, d8_u
 void d8_swarm_set_tile_field_limit_direct(d8_swarm_t* swarm, d8_u32 limit) {
     if (!swarm) return;
     swarm->topo.reserved2 = limit;
-    
+
     /* Update active_tile_count based on limit */
-    /* Limit 128=16384, 256=65536, 512=262144, 1024=1048576, 2048=4194304 */
-    /* But we use D8_K_EXPECTED_W * D8_K_EXPECTED_H = 128*32 = 4096 max */
-    /* For now, just clamp to D8_K_TILE_COUNT */
     if (limit > 0 && limit < D8_K_TILE_COUNT) {
         swarm->active_tile_count = limit;
     } else if (limit >= D8_K_TILE_COUNT) {
         swarm->active_tile_count = D8_K_TILE_COUNT;
+    }
+    
+    /* Compute active_tile_w and active_tile_h from active_tile_count */
+    /* Use the same logic as in d8_swarm_ev_bake and IDE's compute_active_dims */
+    if (swarm->active_tile_count == 0 || swarm->active_tile_count == D8_K_TILE_COUNT) {
+        swarm->active_tile_w = D8_K_EXPECTED_W;  /* 128 */
+        swarm->active_tile_h = D8_K_EXPECTED_H;  /* 32 */
+    } else {
+        switch (swarm->active_tile_count) {
+        case 256:  swarm->active_tile_w = 32;  swarm->active_tile_h = 8;  break;
+        case 512:  swarm->active_tile_w = 32;  swarm->active_tile_h = 16; break;
+        case 1024: swarm->active_tile_w = 64;  swarm->active_tile_h = 16; break;
+        case 2048: swarm->active_tile_w = 64;  swarm->active_tile_h = 32; break;
+        case 4096: swarm->active_tile_w = 128; swarm->active_tile_h = 32; break;
+        default:
+            /* For non-standard sizes, compute approximate dimensions */
+            swarm->active_tile_w = (swarm->active_tile_count < D8_K_EXPECTED_W) 
+                ? swarm->active_tile_count : D8_K_EXPECTED_W;
+            swarm->active_tile_h = (swarm->active_tile_count + swarm->active_tile_w - 1) 
+                / swarm->active_tile_w;
+            break;
+        }
     }
 }
 
@@ -1253,7 +1205,7 @@ d8_status_t d8_swarm_serialize_current_bake(const d8_swarm_t* swarm,
     if (tile_count == 0 || tile_count > D8_K_TILE_COUNT) {
         tile_count = D8_K_TILE_COUNT;  /* Default to full count */
     }
-    
+
     size_t header_size = 28;
     size_t topology_size = 8 + 16;  /* TLV header + data */
     size_t tile_params_size = 8 + (tile_count * 13);
@@ -1261,10 +1213,11 @@ d8_status_t d8_swarm_serialize_current_bake(const d8_swarm_t* swarm,
     size_t weights_size = 8 + (tile_count * 40);
     size_t reset_on_fire_size = 8 + (tile_count * 2);
     size_t readout_size = 8 + 12;
+    size_t field_limit_size = 8 + 4;  /* TILE_FIELD_LIMIT TLV */
     size_t crc_size = 8 + 4;
     size_t total_size = header_size + topology_size + tile_params_size +
                         routing_size + weights_size + reset_on_fire_size +
-                        readout_size + crc_size;
+                        readout_size + field_limit_size + crc_size;
 
     /* Allocate buffer */
     d8_u8* out_buf = (d8_u8*)malloc(total_size);
@@ -1315,13 +1268,15 @@ d8_status_t d8_swarm_serialize_current_bake(const d8_swarm_t* swarm,
         /* reserved (bytes 10-11) must be 0 */
         data[10] = 0;
         data[11] = 0;
-        
-        /* reserved2 (bytes 12-15) must be 0 per spec v0.2 */
-        data[12] = 0;
-        data[13] = 0;
-        data[14] = 0;
-        data[15] = 0;
-        
+
+        /* reserved2 (bytes 12-15) = tile_field_limit for serialization */
+        /* This ensures that small swarms can be properly restored */
+        d8_u32 tile_field_limit = (d8_u32)swarm->active_tile_count;
+        data[12] = tile_field_limit & 0xFF;
+        data[13] = (tile_field_limit >> 8) & 0xFF;
+        data[14] = (tile_field_limit >> 16) & 0xFF;
+        data[15] = (tile_field_limit >> 24) & 0xFF;
+
         memcpy(out_buf + offset, tlv, sizeof(tlv));
         offset += sizeof(tlv);
     }
@@ -1470,8 +1425,26 @@ d8_status_t d8_swarm_serialize_current_bake(const d8_swarm_t* swarm,
         offset += sizeof(tlv);
     }
 
-    /* TEMPORARY: Skip TILE_FIELD_LIMIT TLV for debugging memory corruption */
-    /* TODO: Re-enable once memory issue is resolved */
+    /* Write TILE_FIELD_LIMIT TLV - stores active_tile_count for proper restoration */
+    {
+        d8_u8 tlv[12];
+        memset(tlv, 0, sizeof(tlv));
+        d8_u16* type = (d8_u16*)(tlv + 0);
+        d8_u16* tflags = (d8_u16*)(tlv + 2);
+        d8_u32* len = (d8_u32*)(tlv + 4);
+        *type = D8_TLV_TILE_FIELD_LIMIT;
+        *tflags = 0;
+        *len = 4;
+
+        d8_u32 tile_field_limit = (d8_u32)swarm->active_tile_count;
+        tlv[8] = tile_field_limit & 0xFF;
+        tlv[9] = (tile_field_limit >> 8) & 0xFF;
+        tlv[10] = (tile_field_limit >> 16) & 0xFF;
+        tlv[11] = (tile_field_limit >> 24) & 0xFF;
+
+        memcpy(out_buf + offset, tlv, sizeof(tlv));
+        offset += sizeof(tlv);
+    }
 
     /* Write total_len BEFORE CRC (total_len is part of CRC calculation) */
     /* total_len = full blob size including CRC TLV (12 bytes) */
