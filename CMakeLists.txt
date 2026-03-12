@@ -73,7 +73,7 @@ if (D8_BUILD_TESTS)
 
   # Small swarm serialization test
   add_executable(d8_test_small_swarm tests/test_small_swarm_serialization.c)
-  target_link_libraries(d8_test_small_swarm d8_core d8_bake_gen d8_bake)
+  target_link_libraries(d8_test_small_swarm d8_core d8_bake_gen)
   target_include_directories(d8_test_small_swarm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/bake_gen)
   add_test(NAME small_swarm_test COMMAND d8_test_small_swarm)
 endif()
