@@ -17,7 +17,7 @@ const uiElements = {};
 
 // Current VSB and weights values
 let currentVSB = new Uint8Array(8).fill(0);
-let currentWeights = new Int8Array([64, 32, -48, 16, -32, 48, -16, 80]);
+let currentWeights = new Int8Array([0, 10, 20, 40, -40, -20, -10, 80]);
 
 /**
  * Check if accumulator is in lock state (between thr_lo and thr_hi)
@@ -175,22 +175,21 @@ function doReset() {
 function updateUI(tileState) {
     // Update accumulator
     uiElements.accumulator.textContent = tileState.accumulator;
-    
-    // Update lock status
-    const locked = isLocked(tileState.accumulator, tileState.thr_lo, tileState.thr_hi);
-    uiElements.lock.textContent = locked ? 'YES' : 'NO';
-    uiElements.lock.className = locked ? 'lock-yes' : 'lock-no';
-    
+
+    // Update lock status (use tileState.inLock directly)
+    uiElements.lock.textContent = tileState.inLock ? 'YES' : 'NO';
+    uiElements.lock.className = tileState.inLock ? 'lock-yes' : 'lock-no';
+
     // Update phase with color
     uiElements.phase.textContent = tileState.phase;
-    uiElements.phase.style.color = 
+    uiElements.phase.style.color =
         tileState.phase === 'read' ? '#4aff4a' :
         tileState.phase === 'write' ? '#ffff4a' : '#aaaaff';
-    
+
     // Update fire status
     uiElements.fire.textContent = tileState.fired ? 'YES' : 'NO';
     uiElements.fire.className = tileState.fired ? 'fire-yes' : 'fire-no';
-    
+
     // Sync input values with tile state
     uiElements.thrLo.value = tileState.thr_lo;
     uiElements.thrHi.value = tileState.thr_hi;
@@ -238,8 +237,8 @@ function init() {
     
     // Configure tile with demo parameters
     tile.setParams({
-        thr_lo: -200,
-        thr_hi: 200,
+        thr_lo: -2000,
+        thr_hi: 3000,
         decay16: 0,  // No auto-decay in manual mode
         accumulator: 0
     });

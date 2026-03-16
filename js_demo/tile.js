@@ -55,32 +55,39 @@ export class Tile {
             throw new Error('VSB must be 8-element array');
         }
         
+        // Check if in LOCK state (accumulator between thr_lo and thr_hi)
+        const inLock = this.accumulator >= this.thr_lo && this.accumulator <= this.thr_hi;
+        
         // Phase READ: Read VSB inputs and apply weights
         this.phase = 'read';
         
         let weightedSum = 0;
-        for (let i = 0; i < 8; i++) {
-            // Weight = signed value, VSB = unsigned 0-15
-            // Contribution = weight * vsb[i]
-            weightedSum += this.weights[i] * vsb[i];
+        
+        // Only accumulate if NOT in lock state
+        if (!inLock) {
+            for (let i = 0; i < 8; i++) {
+                // Weight = signed value, VSB = unsigned 0-15
+                // Contribution = weight * vsb[i]
+                weightedSum += this.weights[i] * vsb[i];
+            }
         }
         
         // Phase WRITE: Update accumulator
         this.phase = 'write';
         
-        // Add weighted sum to accumulator
+        // Add weighted sum to accumulator (only if not in lock)
         this.accumulator += weightedSum;
         
         // Clamp accumulator to int16 range
         this.accumulator = Math.max(-32768, Math.min(32767, this.accumulator));
         
-        // Apply decay: move accumulator toward zero
+        // Apply decay: move accumulator toward zero (always applies, even in lock)
         this._applyDecay();
         
-        // Check fire condition
-        this.fired = this.accumulator > this.thr_hi;
+        // Check fire condition (only fires when exiting lock zone upward)
+        this.fired = !inLock && this.accumulator > this.thr_hi;
         
-        // Reset if fired (optional, based on reset_on_fire mask)
+        // Reset if fired
         if (this.fired) {
             this.accumulator = 0;
         }
@@ -90,7 +97,8 @@ export class Tile {
         return {
             fired: this.fired,
             accumulator: this.accumulator,
-            weightedSum: weightedSum
+            weightedSum: weightedSum,
+            inLock: inLock
         };
     }
     
@@ -140,6 +148,7 @@ export class Tile {
      * Get current state for rendering
      */
     getState() {
+        const inLock = this.accumulator >= this.thr_lo && this.accumulator <= this.thr_hi;
         return {
             accumulator: this.accumulator,
             thr_lo: this.thr_lo,
@@ -149,6 +158,7 @@ export class Tile {
             priority: this.priority,
             weights: Array.from(this.weights),
             fired: this.fired,
+            inLock: inLock,
             phase: this.phase
         };
     }

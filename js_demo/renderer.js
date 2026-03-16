@@ -52,7 +52,6 @@ export class TileRenderer {
         this.barrel = null;
         this.liquid = null;
         this.pipes = [];
-        this.valves = [];
         this.decayPipe = null;
         this.particles = [];
         
@@ -224,24 +223,24 @@ export class TileRenderer {
             barrelGroup.add(mark);
         }
         
-        // thr_lo marker (red ring)
-        const thrLoGeometry = new THREE.TorusGeometry(1.05, 0.03, 8, 32);
+        // thr_lo marker (bright red line around barrel)
+        const thrLoGeometry = new THREE.TorusGeometry(1.02, 0.02, 8, 32);
         const thrLoMaterial = new THREE.MeshBasicMaterial({ 
             color: 0xff4444,
             transparent: true,
-            opacity: 0.8
+            opacity: 1.0
         });
         this.thrLoMarker = new THREE.Mesh(thrLoGeometry, thrLoMaterial);
         this.thrLoMarker.position.y = 1.25;  // Will be updated based on thr_lo
         this.thrLoMarker.rotation.x = Math.PI / 2;
         barrelGroup.add(this.thrLoMarker);
         
-        // thr_hi marker (green ring)
-        const thrHiGeometry = new THREE.TorusGeometry(1.05, 0.03, 8, 32);
+        // thr_hi marker (bright green line around barrel)
+        const thrHiGeometry = new THREE.TorusGeometry(1.02, 0.02, 8, 32);
         const thrHiMaterial = new THREE.MeshBasicMaterial({ 
             color: 0x44ff44,
             transparent: true,
-            opacity: 0.8
+            opacity: 1.0
         });
         this.thrHiMarker = new THREE.Mesh(thrHiGeometry, thrHiMaterial);
         this.thrHiMarker.position.y = 1.25;  // Will be updated based on thr_hi
@@ -251,7 +250,7 @@ export class TileRenderer {
         // Lock zone (semi-transparent cylinder between thr_lo and thr_hi)
         const lockZoneGeometry = new THREE.CylinderGeometry(1.0, 1.0, 0.1, 32, 1, true);
         const lockZoneMaterial = new THREE.MeshBasicMaterial({ 
-            color: 0x00aaff,  // Blue to match liquid
+            color: 0x44ff44,  // Green to match thr markers
             transparent: true,
             opacity: 0.15,
             side: THREE.DoubleSide
@@ -267,7 +266,8 @@ export class TileRenderer {
 
         // 8 pipes arranged in a circle under the barrel
         const barrelRadius = 1.0;
-        const pipeRadius = 0.035;  // Smaller radius pipes
+        const basePipeRadius = 0.01;   // Minimum radius (weight 0 = line)
+        const maxPipeRadius = 0.08;    // Max radius (|weight| 127)
         // Pipes positioned well inside barrel radius so always covered by liquid
         const pipeOffset = barrelRadius * 0.6;  // 0.6 - pipes near center, always under liquid
         const pipeLength = 0.8;
@@ -277,38 +277,26 @@ export class TileRenderer {
             const x = Math.cos(angle) * pipeOffset;
             const z = Math.sin(angle) * pipeOffset;
 
-            // Pipe: vertical cylinder from y=0 up to barrel bottom (y=0)
-            const pipeGeometry = new THREE.CylinderGeometry(pipeRadius, pipeRadius, pipeLength, 16);
-
-            // Color based on weight sign (will be updated later)
+            // Pipe radius will be updated based on weight magnitude
             const pipeMaterial = new THREE.MeshStandardMaterial({
-                color: i % 2 === 0 ? 0x44ff44 : 0xff4444,
+                color: 0x888888,  // Gray initially
                 metalness: 0.6,
                 roughness: 0.3
             });
 
+            // Pipe: vertical cylinder (radius will be updated)
+            const pipeGeometry = new THREE.CylinderGeometry(basePipeRadius, basePipeRadius, pipeLength, 16);
             const pipe = new THREE.Mesh(pipeGeometry, pipeMaterial);
 
             // Position: pipe goes from y=-pipeLength to y=0 (barrel bottom)
             pipe.position.set(x, -pipeLength / 2, z);
+            
+            // Store initial scale for updates
+            pipe.userData.baseRadius = basePipeRadius;
+            pipe.userData.maxRadius = maxPipeRadius;
 
             pipeGroup.add(pipe);
             this.pipes.push(pipe);
-
-            // Valve: torus (ring valve) on each pipe, positioned along the pipe
-            const valveGeometry = new THREE.TorusGeometry(0.08, 0.03, 8, 16);
-            const valveMaterial = new THREE.MeshStandardMaterial({
-                color: 0x8888aa,
-                metalness: 0.7,
-                roughness: 0.2
-            });
-
-            const valve = new THREE.Mesh(valveGeometry, valveMaterial);
-            valve.position.set(x, -pipeLength * 0.4, z);
-            valve.rotation.x = Math.PI / 2;
-
-            pipeGroup.add(valve);
-            this.valves.push(valve);
         }
 
         this.scene.add(pipeGroup);
@@ -416,15 +404,12 @@ export class TileRenderer {
         // Update threshold markers (thr_lo, thr_hi)
         this._updateThresholdMarkers(tileState.thr_lo, tileState.thr_hi);
         
-        // Update liquid color based on value and fire state
-        this._updateLiquidColor(tileState.accumulator, tileState.fired);
+        // Update liquid color based on value and fire/lock state
+        this._updateLiquidColor(tileState.accumulator, tileState.fired, tileState.inLock);
         
         // Update pipe colors based on weights
         this._updatePipeColors(tileState.weights);
-        
-        // Animate valves based on VSB input
-        this._updateValves(vsbInputs);
-        
+
         // Update decay pipe visibility
         this._updateDecayPipe(tileState.decay16);
         
@@ -501,15 +486,17 @@ export class TileRenderer {
         this.lockZone.scale.y = Math.max(0.01, lockZoneScaleY);
     }
     
-    _updateLiquidColor(accumulator, fired) {
-        // Color based on accumulator value
+    _updateLiquidColor(accumulator, fired, inLock) {
+        // Color based on accumulator value and state
         // Negative: dark blue, Zero: cyan, Positive: light blue/white
+        // LOCK: bright white
+        // FIRE: bright white
         
         let r, g, b;
         const normalized = accumulator / 32768;
         
-        if (fired) {
-            // Bright white when fired
+        if (fired || inLock) {
+            // Bright white when fired OR in lock
             r = 1;
             g = 1;
             b = 1;
@@ -537,7 +524,8 @@ export class TileRenderer {
         for (let i = 0; i < 8; i++) {
             const weight = weights[i];
             const pipe = this.pipes[i];
-            
+
+            // Color based on weight sign
             if (weight > 0) {
                 // Positive weight: green (inflow)
                 const intensity = Math.min(1, weight / 127);
@@ -547,22 +535,20 @@ export class TileRenderer {
                 const intensity = Math.min(1, Math.abs(weight) / 127);
                 pipe.material.color.setRGB(0.4 + intensity * 0.6, 0.2, 0.2);
             } else {
-                // Zero: gray
-                pipe.material.color.setRGB(0.4, 0.4, 0.4);
+                // Zero weight: gray (inactive)
+                pipe.material.color.setRGB(0.5, 0.5, 0.5);
             }
-        }
-    }
-    
-    _updateValves(vsbInputs) {
-        for (let i = 0; i < 8; i++) {
-            const vsb = vsbInputs[i];
-            const valve = this.valves[i];
-
-            // Valve rotates based on VSB input (0-15)
-            const openAmount = vsb / 15;
-
-            // Rotate valve ring to show opening
-            valve.rotation.z = openAmount * Math.PI * 2;
+            
+            // Scale pipe based on weight magnitude (0-7 visual scale)
+            // Map |weight| (0-127) to scale (0-1)
+            const weightMagnitude = Math.abs(weight) / 127;
+            const baseRadius = pipe.userData.baseRadius;
+            const maxRadius = pipe.userData.maxRadius;
+            const currentRadius = baseRadius + weightMagnitude * (maxRadius - baseRadius);
+            
+            // Scale the pipe mesh (original geometry has radius = baseRadius)
+            const scale = currentRadius / baseRadius;
+            pipe.scale.set(scale, 1, scale);
         }
     }
     
