@@ -17,7 +17,7 @@ const uiElements = {};
 
 // Current VSB and weights values
 let currentVSB = new Uint8Array(8).fill(0);
-let currentWeights = new Int8Array([0, 10, 20, 40, -40, -20, -10, 80]);
+let currentWeights = new Int8Array([0, 10, 20, 40, -40, -20, -10, 56]);
 
 /**
  * Check if accumulator is in lock state (between thr_lo and thr_hi)
@@ -73,14 +73,14 @@ function initUI() {
         
         const input = document.createElement('input');
         input.type = 'number';
-        input.min = '-127';
-        input.max = '127';
+        input.min = '-56';
+        input.max = '56';
         input.value = currentWeights[i].toString();
         input.id = `weight-input-${i}`;
         
         input.addEventListener('change', (e) => {
             let val = parseInt(e.target.value) || 0;
-            val = Math.max(-127, Math.min(127, val));
+            val = Math.max(-56, Math.min(56, val));
             currentWeights[i] = val;
             e.target.value = val;
             tile.setWeights(Array.from(currentWeights));
@@ -125,6 +125,13 @@ function initUI() {
     // Buttons
     document.getElementById('flash-btn').addEventListener('click', doFlash);
     document.getElementById('reset-btn').addEventListener('click', doReset);
+    
+    // Brightness slider
+    const brightnessSlider = document.getElementById('brightness-slider');
+    brightnessSlider.addEventListener('input', (e) => {
+        const brightness = parseFloat(e.target.value);
+        renderer.setBrightness(brightness);
+    });
 }
 
 /**
@@ -142,13 +149,17 @@ function doFlash() {
     // Run tile simulation step with current VSB values
     const result = tile.step(currentVSB);
     
+    // Trigger pipe flow animation
+    const tileState = tile.getState();
+    renderer.triggerPipeFlow(currentWeights, tileState.decay16);
+
     // Update UI
-    updateUI(tile.getState());
-    
+    updateUI(tileState);
+
     // Force renderer update
-    renderer.update(tile.getState(), currentVSB, 0.016);
+    renderer.update(tileState, currentVSB, 0.016);
     renderer.render();
-    
+
     console.log('FLASH:', result);
 }
 
@@ -237,7 +248,7 @@ function init() {
     
     // Configure tile with demo parameters
     tile.setParams({
-        thr_lo: -2000,
+        thr_lo: 2000,
         thr_hi: 3000,
         decay16: 0,  // No auto-decay in manual mode
         accumulator: 0
