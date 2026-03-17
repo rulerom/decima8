@@ -81,6 +81,7 @@ export class TileRenderer {
     _setupMouseControls() {
         const canvas = this.canvas;
         
+        // Mouse events
         canvas.addEventListener('mousedown', (e) => {
             this.isDragging = true;
             this.previousMousePosition = { x: e.clientX, y: e.clientY };
@@ -117,6 +118,69 @@ export class TileRenderer {
             this.cameraDistance = Math.max(3, Math.min(15, this.cameraDistance));
             this._updateCameraPosition();
         }, { passive: false });
+        
+        // Touch events for mobile
+        let lastTouchDistance = 0;
+        
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            
+            if (e.touches.length === 1) {
+                // Single touch - rotate
+                this.isDragging = true;
+                this.previousMousePosition = { 
+                    x: e.touches[0].clientX, 
+                    y: e.touches[0].clientY 
+                };
+            } else if (e.touches.length === 2) {
+                // Two fingers - pinch zoom
+                this.isDragging = false;
+                lastTouchDistance = Math.hypot(
+                    e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY
+                );
+            }
+        }, { passive: false });
+        
+        canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            
+            if (e.touches.length === 1 && this.isDragging) {
+                // Single touch - rotate
+                const deltaX = e.touches[0].clientX - this.previousMousePosition.x;
+                const deltaY = e.touches[0].clientY - this.previousMousePosition.y;
+                
+                this.cameraAngle.y += deltaX * 0.01;
+                this.cameraAngle.x += deltaY * 0.01;
+                
+                // Clamp vertical angle
+                this.cameraAngle.x = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, this.cameraAngle.x));
+                
+                this._updateCameraPosition();
+                
+                this.previousMousePosition = { 
+                    x: e.touches[0].clientX, 
+                    y: e.touches[0].clientY 
+                };
+            } else if (e.touches.length === 2) {
+                // Two fingers - pinch zoom
+                const currentDistance = Math.hypot(
+                    e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY
+                );
+                
+                const delta = currentDistance - lastTouchDistance;
+                this.cameraDistance -= delta * 0.05;
+                this.cameraDistance = Math.max(3, Math.min(15, this.cameraDistance));
+                this._updateCameraPosition();
+                
+                lastTouchDistance = currentDistance;
+            }
+        }, { passive: false });
+        
+        canvas.addEventListener('touchend', () => {
+            this.isDragging = false;
+        });
         
         // Initial camera position
         this._updateCameraPosition();
