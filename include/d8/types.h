@@ -151,29 +151,37 @@ typedef struct d8_view_snapshot {
     d8_u32 bake_id_active;
     d8_u32 profile_id_active;
     d8_u32 frame_tag;
-    
+
     d8_u8  vsb_ingress16[D8_K_LANES];
     d8_u8  bus16[D8_K_LANES];
-    
+
     d8_u8  v_state[D8_K_TILE_COUNT];
-    
+
     d8_u16 winner_tile_id[D8_K_DOMAINS];
     d8_u16 winner_pattern_id[D8_K_DOMAINS];
+    d8_u8  winner_priority[D8_K_DOMAINS];
     d8_u8  fired_cnt_sat[D8_K_DOMAINS];
     d8_u16 reset_mask_from_winner[D8_K_DOMAINS];
-    
+
     d8_u16 auto_reset_mask16;
     d8_u16 collide_mask16;
     d8_u16 domains_fired_mask16;
-    
+
     d8_u8  in_clip_bits[D8_K_TILE_COUNT];
     d8_u8  bus_clip_mask8;
-    
+
     d8_u32 flags32_last;
-    
+
     d8_u32 cycle_time_us;
     d8_u32 cycle_time_peak_us;
     d8_u32 cycle_time_avg_us;
+
+    /* Domain connectivity for IDE */
+    d8_u8  domain_conn4[D8_K_TILE_COUNT];
+
+    /* VSB activity map */
+    d8_u8  bus_prefix16[(D8_K_EXPECTED_W + 1) * D8_K_LANES];
+    d8_u8  bus_prefix_clip_mask8[D8_K_EXPECTED_W + 1];
 } d8_view_snapshot_t;
 
 /* ============================================================================
@@ -181,19 +189,32 @@ typedef struct d8_view_snapshot {
  * ============================================================================ */
 
 typedef struct d8_tile_state {
-    d8_u8  thr_norm_4bit;
-    d8_u8  locked;
-    d8_u8  fire_event;
-    d8_u8  reserved;
+    d8_u8  thr_cur16;       /* 0..15 (clamped positive) */
+    d8_u8  locked_flag;     /* 0/1 */
+    d8_u8  fire_event;      /* 0/1 (LOCK_TRANSITION in last flash) */
+    d8_u8  _pad[5];         /* Padding for 8-byte alignment */
 } d8_tile_state_t;
 
 typedef struct d8_shared_buffer {
-    d8_u32 bake_id_active;
-    d8_u32 profile_id_active;
-    d8_u32 frame_tag;
-    d8_u32 reserved;
-    
-    d8_tile_state_t tile_state[D8_K_TILE_COUNT];
+    /* Tile states: one per tile (4096 tiles) */
+    d8_tile_state_t tiles[D8_K_TILE_COUNT];
+
+    /* Frame metadata */
+    volatile d8_u32 frame_tag;
+    volatile d8_u32 flags32_last;
+    volatile d8_u32 bake_id_active;
+    volatile d8_u32 profile_id_active;
+    volatile d8_u32 cycle_time_us;
+
+    /* BUS readout */
+    d8_u8 bus16[D8_K_LANES];
+    d8_u8 bus_clip_mask8;
+
+    /* Domain state */
+    d8_u16 winner_tile_id[D8_K_DOMAINS];  /* 0xFFFF if none */
+    volatile d8_u16 auto_reset_mask16;
+    volatile d8_u16 collide_mask16;
+    volatile d8_u16 domains_fired_mask16;
 } d8_shared_buffer_t;
 
 /* ============================================================================

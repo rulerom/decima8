@@ -376,16 +376,16 @@ static void compute_parent_topology(d8_swarm_t* swarm) {
 
 static void write_to_shared_buffer(d8_swarm_t* swarm) {
     if (!swarm || !swarm->shared_buffer) return;
-    
+
     for (size_t t = 0; t < swarm->active_tile_count; t++) {
         d8_i16 thr_i16 = swarm->thr_cur[t];
         d8_u8 thr = clamp15_u8((thr_i16 > 0) ? thr_i16 : 0);
         d8_u8 locked = swarm->locked[t];
         d8_u8 fire = (swarm->snapshot.v_state[t] & 0x04) ? 1 : 0;
-        
-        swarm->shared_buffer->tile_state[t].thr_norm_4bit = thr;
-        swarm->shared_buffer->tile_state[t].locked = locked;
-        swarm->shared_buffer->tile_state[t].fire_event = fire;
+
+        swarm->shared_buffer->tiles[t].thr_cur16 = thr;
+        swarm->shared_buffer->tiles[t].locked_flag = locked;
+        swarm->shared_buffer->tiles[t].fire_event = fire;
     }
 }
 

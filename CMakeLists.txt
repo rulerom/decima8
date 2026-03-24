@@ -39,6 +39,7 @@ add_library(d8_core STATIC
   src/swarm_core.c
   src/tlv.c
   src/crc32_ieee.c
+  src/vsb.c
 )
 
 target_include_directories(d8_core PUBLIC
@@ -83,7 +84,11 @@ if (D8_BUILD_BENCHMARKS)
   # Swarm benchmark
   add_executable(d8_swarm_bench bench/swarm_bench.c)
   target_link_libraries(d8_swarm_bench d8_core)
-  
+
+  # Swarm solver (outputs solutions)
+  add_executable(d8_swarm_solver bench/swarm_solver.c)
+  target_link_libraries(d8_swarm_solver d8_core)
+
   # Bake generator benchmark
   add_executable(d8_bake_gen_bench bench/bake_gen_bench.c)
   target_link_libraries(d8_bake_gen_bench d8_bake_gen)
