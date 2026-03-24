@@ -615,13 +615,14 @@ static d8_flash_result_t flash_impl(d8_swarm_t* swarm, d8_u32 tag, const d8_u8* 
         
         /* Clamp to i16 */
         swarm->thr_cur[t] = (d8_i16)((thr_tmp < -32768) ? -32768 : ((thr_tmp > 32767) ? 32767 : thr_tmp));
-        
+
         /* FUSE-LOCK by range */
         d8_i16 thr_lo = swarm->thr_lo[t];
         d8_i16 thr_hi = swarm->thr_hi[t];
-        bool range_active = (thr_lo < thr_hi);
-        /* Lock when |thr_cur| >= |thr_lo| (works for both positive and negative weights) */
-        bool in_range = range_active && (swarm->thr_cur[t] >= thr_lo || swarm->thr_cur[t] <= -thr_lo);
+        
+        /* Lock when thr_cur is within [thr_lo, thr_hi] range (or [-thr_hi, -thr_lo] for negative) */
+        bool in_range = (swarm->thr_cur[t] >= thr_lo && swarm->thr_cur[t] <= thr_hi);
+        
         bool has_signal = (delta != 0);
 
         if (swarm->bake_id > 0 && in_range && has_signal) {
@@ -712,9 +713,7 @@ static d8_flash_result_t flash_impl(d8_swarm_t* swarm, d8_u32 tag, const d8_u8* 
         /* Check if thr_cur is in range [thr_lo, thr_hi] */
         d8_i16 thr_lo = swarm->thr_lo[t];
         d8_i16 thr_hi = swarm->thr_hi[t];
-        bool range_active = (thr_lo < thr_hi);
-        /* Lock when thr_cur >= thr_lo (ignore thr_hi for now - thr_cur can exceed it) */
-        bool in_range = range_active && (swarm->thr_cur[t] >= thr_lo);
+        bool in_range = (swarm->thr_cur[t] >= thr_lo && swarm->thr_cur[t] <= thr_hi);
 
         if (!in_range) continue;  /* Tile not in fuse-lock range */
 
