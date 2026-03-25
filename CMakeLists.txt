@@ -95,6 +95,10 @@ if (D8_BUILD_BENCHMARKS)
   target_link_libraries(d8_bake_gen_bench d8_bake_gen)
 endif()
 
+# -------- Network Solver --------
+add_executable(d8_net_solver net_solver/net_solver.c)
+target_link_libraries(d8_net_solver d8_core)
+
 # -------- Examples --------
 if (D8_BUILD_EXAMPLES)
   # Simple flash example
