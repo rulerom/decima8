@@ -328,24 +328,36 @@ static void compute_row_raw(d8_swarm_t* swarm, size_t tile_id) {
 
     for (size_t r = 0; r < 8; r++) {
         size_t row_offset = tile_id * 64 + r * 8;
-        d8_i16 sum = 0;
-
+        
+        /* === Для аккумулятора: матричное умножение Σ(in16[i] × W[r][i]) === */
+        d8_i16 sum_matrix = 0;
         for (size_t i = 0; i < 8; i++) {
             d8_u8 in_val = in16_ptr[i];
             d8_u8 mag_val = swarm->w_mag[row_offset + i];
             d8_u8 sign_val = swarm->w_sign[row_offset + i];
-
-            /* Direct multiplication: in_val * mag_val */
             d8_i16 mul_result = sign_val ? (d8_i16)(in_val * mag_val) : (d8_i16)(-(d8_i16)(in_val * mag_val));
-            sum += mul_result;
+            sum_matrix += mul_result;
         }
+        
+        /* === Для шины: масштабирование in16[r] × Σ(весов строки) === */
+        d8_i16 weight_sum = 0;
+        for (size_t i = 0; i < 8; i++) {
+            d8_u8 mag_val = swarm->w_mag[row_offset + i];
+            d8_u8 sign_val = swarm->w_sign[row_offset + i];
+            d8_i16 signed_weight = sign_val ? (d8_i16)mag_val : (d8_i16)(-(d8_i16)mag_val);
+            weight_sum += signed_weight;
+        }
+        
+        d8_i16 in_val = (d8_i16)in16_ptr[r];
+        d8_i64 product = (d8_i64)in_val * (d8_i64)weight_sum;
+        
+        /* row_raw для аккумулятора = матричное умножение */
+        row_raw_ptr[r] = sum_matrix;
+        row_signed_ptr[r] = sum_matrix;
 
-        row_raw_ptr[r] = sum;
-        row_signed_ptr[r] = sum;  /* For accumulator: no clamp */
-
-        /* row_out for drive: (max(sum,0) + 7) / 8, clamp15 */
-        int pos = (sum > 0) ? (int)sum : 0;
-        row_out_ptr[r] = clamp15_u8((pos + 7) / 8);
+        /* row_out для шины = масштабирование, нормализация к 56 */
+        int pos = (product > 0) ? (int)product : 0;
+        row_out_ptr[r] = clamp15_u8((pos + 28) / 56);
     }
 }
 
@@ -590,6 +602,10 @@ static d8_flash_result_t flash_impl(d8_swarm_t* swarm, d8_u32 tag, const d8_u8* 
 
             /* locked_before tile remains locked - preserve locked state */
             swarm->locked[t] = 1;
+            
+            /* Compute row_out for locked_before tiles (they need to write to BUS) */
+            compute_row_raw(swarm, t);
+            
             continue;  /* Skip delta accumulation for locked_before tiles */
         }
         
@@ -641,24 +657,23 @@ static d8_flash_result_t flash_impl(d8_swarm_t* swarm, d8_u32 tag, const d8_u8* 
     /* ===================================================================
      * PHASE 3: PHASE_WRITE
      * =================================================================== */
-    
+
     /* Drive selection and BUS accumulation */
     d8_u32 bus_raw[8] = {0};
-    
+
     for (size_t t = 0; t < swarm->active_tile_count; t++) {
         if (!swarm->bus_w[t]) continue;
-        
+
         /* Check if tile can write (locked self or locked ancestor) */
         bool can_write = (swarm->locked[t] != 0);
         if (!can_write) continue;
-        
-        /* Drive selection: if locked, passthrough in16; else row_out */
+
+        /* Drive selection: locked tile writes row_out (VSB × weights) to BUS */
         d8_u8* drive_vec = &swarm->drive_vec[t * 8];
-        const d8_u8* in16_ptr = &swarm->in16[t * 8];
         const d8_u8* row_out_ptr = &swarm->row_out[t * 8];
-        
+
         for (int i = 0; i < 8; i++) {
-            drive_vec[i] = swarm->locked[t] ? in16_ptr[i] : row_out_ptr[i];
+            drive_vec[i] = row_out_ptr[i];
             bus_raw[i] += drive_vec[i];
         }
     }

@@ -250,17 +250,35 @@ clamp15(x)=clamp_range(x,0,15).
 ---
 
 6.5 RowOut pipeline в PHASE_READ (для ACTIVE && !locked_before)
+
+**Два независимых вычисления:**
+
+1. **Для аккумулятора (delta):** матричное умножение входа на веса
+2. **Для шины (drive):** масштабирование входа на сумму весов строки
+
 Для каждой строки r=0..7:
 
-row_raw_signed[r] = Σ_{i=0..7} (in16[i] * Wmag[r][i] * sign)  → диапазон [-840..+840]
+```
+/* Матричное умножение для аккумулятора */
+row_raw_signed[r] = Σ_{i=0..7} (in16[i] * Wmag[r][i] * sign)  → [-840..+840]
 
-Для линий/drive (без отрицательных):
+/* Сумма весов строки для шины */
+weight_sum[r] = Σ_{i=0..7} (Wmag[r][i] * sign)  → [-56..+56]
 
-row16_out[r] = clamp15( (max(row_raw_signed[r], 0) + 7) / 8 ) → 0..15
+/* Масштабирование для шины */
+row16_out[r] = clamp15( (max(in16[r] * weight_sum[r], 0) + 28) / 56 ) → 0..15
+```
 
-Для аккумулятора (signed вклад, без clamp):
+**Нормализация для шины:**
+- weight_sum = +56 (все веса +7) → 100% пропуск (row16_out = in16[r])
+- weight_sum = +28 (половина весов) → ~50% пропуск (row16_out ≈ in16[r] / 2)
+- weight_sum = 0 или отрицательная → 0% (тишина)
 
-row16_signed[r] = row_raw_signed[r] → диапазон [-840..+840]
+**Для аккумулятора (signed вклад, без clamp):**
+
+```
+row16_signed[r] = row_raw_signed[r] → [-840..+840]
+```
 
 ---
 
@@ -311,7 +329,7 @@ in_range = (thr_lo16 < thr_hi16) && (thr_lo16 <= thr_cur16) && (thr_cur16 <= thr
 locked_after = in_range ? 1 : 0
 ```
 - Если locked_after==0 → тайл разлочивается, дети станут ACTIVE==0 в следующем тике.
-- Если locked_after==1 → passthrough, drive_vec=in16.
+- Если locked_after==1 → drive_vec=row16_out (scaled VSB).
 
 События:
 
@@ -325,20 +343,35 @@ locked_after = in_range ? 1 : 0
 
 ---
 
-6.7 FUSE-LOCK passthrough (обязательный)
-Если locked_after==1, тайл действует как "медный мост":
+6.7 FUSE-LOCK (обязательный)
+Если locked_after==1, тайл сохраняет состояние:
 
-- матрица W не применяется,
-- drive_vec[i] = in16[i] для всех i=0..7 (passthrough),
+- thr_cur сохраняется (с учётом decay),
+- тайл может писать на шину BUS16 если имеет флаг BUS_W,
 - **Decay применяется** (если decay16>0, thr_cur16 тянется к 0).
 
 ---
 
 6.8 Drive selection (WRITE)
-В конце READ:
+В конце READ для каждого тайла вычисляются два значения (раздел 6.5):
 
-- если locked_after==1: drive_vec[i] = in16[i]
-- иначе: drive_vec[i] = row16_out[i]
+```
+/* Для аккумулятора (delta): */
+row_raw_signed[r] = Σ_{i=0..7} (in16[i] * Wmag[r][i] * sign)
+
+/* Для шины (drive): */
+weight_sum[r] = Σ_{i=0..7} (Wmag[r][i] * sign)
+row16_out[r] = clamp15((max(in16[r] * weight_sum[r], 0) + 28) / 56)
+```
+
+В PHASE_WRITE:
+
+- если locked_after==1 и BUS_W==1: drive_vec[r] = row16_out[r] (тайл пишет scaled VSB на шину)
+- иначе: тайл не пишет на шину
+
+**Физический смысл:**
+- **Аккумулятор** суммирует матричные произведения для обновления thr_cur
+- **Шина** масштабирует VSB ingress на сумму весов строки для эстафетной передачи
 
 ---
 
@@ -605,28 +638,98 @@ Island отдаёт FLAGS32 (минимум):
 
 Назначение: каскадирование машин. Пакеты одинаковые для IN и OUT.
 
-Формат (37 bytes, little-endian):
+**Формат (37 bytes, little-endian):**
 
-- magic u32 = 'D8UP' (0x50553844)
-- version u16 = 1
-- flags u16: bit0 has_winner, bit1 has_bus, bit2 has_cycle, bit3 has_flags
-- frame_tag u32
-- domain_id u8
-- pattern_id u16
-- reset_mask16 u16
-- collision_mask16 u16
-- winner_tile_id u16
-- cycle_time_us u32
-- flags32_last u32
-- bus16[8] u8
+| Offset | Size | Field            | Description                                    |
+|--------|------|------------------|------------------------------------------------|
+| 0      | 4    | magic u32        | 'D8UP' (0x50553844)                           |
+| 4      | 2    | version u16      | Версия протокола (=1)                         |
+| 6      | 2    | flags u16        | Биты: bit0=has_winner, bit1=has_bus, bit2=has_cycle, bit3=has_flags |
+| 8      | 4    | frame_tag u32    | Номер кадра (тег)                             |
+| 12     | 1    | domain_id u8     | ID домена-победителя (0..15, 0xFF если нет)   |
+| 13     | 2    | pattern_id u16   | ID паттерна победителя                        |
+| 15     | 2    | reset_mask16 u16 | Маска доменов для сброса                      |
+| 17     | 2    | collision_mask16 u16 | Маска доменов с коллизией                |
+| 19     | 2    | winner_tile_id u16 | ID тайла-победителя (0xFFFF если нет)       |
+| 21     | 4    | cycle_time_us u32 | Время цикла в микросекундах                  |
+| 25     | 4    | flags32_last u32  | FLAGS32 с последнего flash                   |
+| 29     | 8    | bus16[8] u8       | Значения шины BUS16 (0..15 на линию)         |
 
-Примечания:
+**Примечания:**
 
-- reset_mask16 задаёт домены для RESET_DOMAIN.
-- collision_mask16/winner_tile_id/pattern_id валидны если flags has_winner.
-- bus16 валиден если flags has_bus.
-- cycle_time_us валиден если flags has_cycle.
-- flags32_last валиден если flags has_flags.
+- **reset_mask16** задаёт домены для RESET_DOMAIN перед flash.
+- **collision_mask16/winner_tile_id/pattern_id** валидны если `flags & 0x0001` (has_winner).
+- **bus16** валиден если `flags & 0x0002` (has_bus).
+- **cycle_time_us** валиден если `flags & 0x0004` (has_cycle).
+- **flags32_last** валиден если `flags & 0x0008` (has_flags).
+
+---
+
+19) Cascade Configuration (каскад машин)
+
+**Назначение:** объединение нескольких машин Decima-8 в каскад для обработки одного VSB потока.
+
+**Топология:**
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Machine   │────▶│   Machine   │────▶│   Machine   │
+│     #1      │ UDP │     #2      │ UDP │     #3      │
+│  (IDE/Host) │     │  (Solver)   │     │  (Solver)   │
+└─────────────┘     └─────────────┘     └─────────────┘
+      │                   │                   │
+      │ UDP OUT           │ UDP OUT           │ UDP OUT
+      │ port 9902         │ port 9902         │ port 9902
+      ▼                   ▼                   ▼
+      │ UDP IN            │ UDP IN            │ UDP IN
+      │ port 9901         │ port 9901         │ port 9901
+```
+
+**Конфигурация портов:**
+
+| Машина      | UDP IN (приём) | UDP OUT (отправка) |
+|-------------|----------------|-------------------|
+| Machine #1  | 9901           | 9902              |
+| Machine #2  | 9902           | 9903              |
+| Machine #3  | 9903           | 9904              |
+
+**Порядок обработки:**
+
+1. **Machine #1 (IDE/Host):**
+   - Генерирует VSB ingress (из TapeDeck или другого источника)
+   - Выполняет EV_FLASH локально
+   - Отправляет UDP пакет с решениями (winner_tile_id, bus16, reset_mask16)
+
+2. **Machine #2..N (Solvers):**
+   - Получают UDP пакет от предыдущей машины
+   - Выполняют **RESET_DOMAIN** по `reset_mask16` из пакета
+   - Выполняют EV_FLASH с `bus16` из пакета как VSB ingress
+   - Отправляют UDP пакет со своими решениями следующей машине
+
+**Важно:**
+
+- Все машины в каскаде должны иметь **одинаковый bake** (личность).
+- **reset_mask16** передаётся по каскаду для синхронизации сброса доменов.
+- **bus16** на шине — это результат суммирования вкладов всех locked тайлов с BUS_W.
+- Каждая машина добавляет свои решения в SolutionsPanel независимо.
+
+**Пример команды для net_solver:**
+
+```bash
+# Machine #2 (Solver 1)
+net_solver -r 9902 -s 9903 -h 192.168.1.101 -R -v bake.d8p
+
+# Machine #3 (Solver 2)
+net_solver -r 9903 -s 9904 -h 192.168.1.102 -R -v bake.d8p
+```
+
+**Параметры:**
+- `-r <port>` — порт для приёма UDP (UDP IN)
+- `-s <port>` — порт для отправки UDP (UDP OUT)
+- `-h <host>` — IP адрес следующей машины в каскаде
+- `-R` — сброс доменов после каждого решения (рекомендуется)
+- `-v` — verbose режим (логирование решений)
+- `-vv` — полный trace (вход VSB + активация тайлов)
 
 ---
 
@@ -634,11 +737,11 @@ Island отдаёт FLAGS32 (минимум):
 
 1. EV_FLASH всегда выполняет READ→WRITE, двойная буферизация (нельзя читать то, что пишешь).
 2. EV_RESET_DOMAIN и EV_BAKE только между EV_FLASH.
-3. ACTIVE closure — **least fixed point** по locked_before (6.1). Это обеспечивает “схлоп ветки” без лишних полуживых тиков.
+3. ACTIVE closure — **least fixed point** по locked_before (6.1). Это обеспечивает "схлоп ветки" без лишних полуживых тиков.
 4. Если ACTIVE==0, тайл принудительно: thr_cur16=0, locked=0, без веса/decay/drive.
 5. Decay тянет к 0 и не перескакивает 0 (6.6).
 6. Lock по диапазону [thr_lo16..thr_hi16] (6.6).
-7. LOCK passthrough обязателен: drive_vec=in16 при locked.
+7. LOCK drive: drive_vec=row16_out при locked (6.8) — VSB масштабируется на сумму весов строки.
 
 ---
 
