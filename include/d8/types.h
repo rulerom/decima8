@@ -12,6 +12,11 @@
 #include <stdbool.h>
 #include <stdalign.h>
 
+/* Platform-specific includes */
+#ifndef _WIN32
+#include <pthread.h>
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
