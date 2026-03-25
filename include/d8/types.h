@@ -34,9 +34,13 @@ typedef size_t    d8_size_t;
 #ifdef _WIN32
 typedef void*     d8_socket_t;      /* SOCKET (void* for C compatibility) */
 typedef void*     d8_thread_t;      /* HANDLE for thread */
+#define D8_THREAD_NULL NULL
+#define D8_THREAD_IS_VALID(t) ((t) != NULL)
 #else
 typedef int       d8_socket_t;      /* int socket file descriptor */
-typedef void*     d8_thread_t;      /* pthread_t (opaque pointer) */
+typedef pthread_t d8_thread_t;      /* pthread_t */
+#define D8_THREAD_NULL 0
+#define D8_THREAD_IS_VALID(t) ((t) != 0)
 #endif
 
 /* ============================================================================

@@ -71,16 +71,14 @@ static inline void d8_socket_close(socket_native_t sock) {
 #else /* POSIX */
 
 static inline int d8_thread_create(d8_thread_t* thread, void (*start_routine)(void*), void* arg) {
-    pthread_t t;
-    if (pthread_create(&t, NULL, (void*(*)(void*))start_routine, arg) != 0) {
+    if (pthread_create(thread, NULL, (void*(*)(void*))start_routine, arg) != 0) {
         return -1;
     }
-    *(pthread_t*)thread = t;
     return 0;
 }
 
 static inline int d8_thread_join(d8_thread_t thread) {
-    pthread_join((pthread_t)thread, NULL);
+    pthread_join(thread, NULL);
     return 0;
 }
 
@@ -108,46 +106,54 @@ typedef struct {
 
 int d8_udp_sender_init(d8_udp_sender_t* sender) {
     if (!sender) return -1;
-    
+
     memset(sender, 0, sizeof(d8_udp_sender_t));
+#ifdef _WIN32
     sender->socket = NULL;
+#else
+    sender->socket = -1;
+#endif
     sender->initialized = 0;
-    
+
 #ifdef _WIN32
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
         return -1;
     }
 #endif
-    
+
     sender->initialized = 1;
     return 0;
 }
 
 void d8_udp_sender_cleanup(d8_udp_sender_t* sender) {
     if (!sender || !sender->initialized) return;
-    
+
     d8_udp_sender_close(sender);
-    
+
 #ifdef _WIN32
     WSACleanup();
 #endif
-    
+
     sender->initialized = 0;
 }
 
 int d8_udp_sender_open(d8_udp_sender_t* sender, const char* host, d8_u16 port) {
     if (!sender || !host) return -1;
-    
+
     d8_udp_sender_close(sender);
-    
+
     /* Create socket */
     socket_native_t sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (sock == INVALID_SOCKET_NATIVE) {
         return -1;
     }
-    
+
+#ifdef _WIN32
     sender->socket = (d8_socket_t)(void*)(size_t)sock;
+#else
+    sender->socket = sock;
+#endif
 #ifdef _WIN32
     strncpy_s((char*)sender->host, D8_UDP_MAX_HOST_LEN, host, D8_UDP_MAX_HOST_LEN - 1);
 #else
@@ -160,17 +166,33 @@ int d8_udp_sender_open(d8_udp_sender_t* sender, const char* host, d8_u16 port) {
 }
 
 void d8_udp_sender_close(d8_udp_sender_t* sender) {
-    if (!sender || !sender->socket) return;
-    
+    if (!sender) return;
+
+#ifdef _WIN32
+    if (!sender->socket) return;
     socket_native_t sock = (socket_native_t)(size_t)(void*)sender->socket;
+#else
+    if (sender->socket < 0) return;
+    socket_native_t sock = sender->socket;
+#endif
     d8_socket_close(sock);
+#ifdef _WIN32
     sender->socket = NULL;
+#else
+    sender->socket = -1;
+#endif
 }
 
 int d8_udp_sender_send(d8_udp_sender_t* sender, const d8_udp_packet_t* packet) {
-    if (!sender || !sender->socket || !packet) return -1;
+    if (!sender || !packet) return -1;
 
+#ifdef _WIN32
+    if (!sender->socket) return -1;
     socket_native_t sock = (socket_native_t)(size_t)(void*)sender->socket;
+#else
+    if (sender->socket < 0) return -1;
+    socket_native_t sock = sender->socket;
+#endif
 
     /* Setup destination address */
     struct sockaddr_in addr;
@@ -205,9 +227,15 @@ int d8_udp_sender_send(d8_udp_sender_t* sender, const d8_udp_packet_t* packet) {
 }
 
 int d8_udp_sender_send_raw(d8_udp_sender_t* sender, const d8_u8* data, d8_size_t size) {
-    if (!sender || !sender->socket || !data || size == 0) return -1;
+    if (!sender || !data || size == 0) return -1;
 
+#ifdef _WIN32
+    if (!sender->socket) return -1;
     socket_native_t sock = (socket_native_t)(size_t)(void*)sender->socket;
+#else
+    if (sender->socket < 0) return -1;
+    socket_native_t sock = sender->socket;
+#endif
 
     /* Setup destination address */
     struct sockaddr_in addr;
@@ -294,18 +322,22 @@ static void d8_udp_receiver_thread_func(void* arg) {
 
 int d8_udp_receiver_init(d8_udp_receiver_t* receiver) {
     if (!receiver) return -1;
-    
+
     memset(receiver, 0, sizeof(d8_udp_receiver_t));
+#ifdef _WIN32
     receiver->socket = NULL;
+#else
+    receiver->socket = -1;
+#endif
     receiver->initialized = 0;
-    
+
 #ifdef _WIN32
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
         return -1;
     }
 #endif
-    
+
     receiver->initialized = 1;
     return 0;
 }
@@ -325,22 +357,26 @@ void d8_udp_receiver_cleanup(d8_udp_receiver_t* receiver) {
 int d8_udp_receiver_start(d8_udp_receiver_t* receiver, d8_u16 port,
                            d8_udp_packet_handler_t handler, void* user_data) {
     if (!receiver || !handler) return -1;
-    
+
     d8_udp_receiver_stop(receiver);
-    
+
     receiver->port = port;
     receiver->handler = handler;
     receiver->user_data = user_data;
     receiver->running = 1;
-    
+
     /* Create socket */
     socket_native_t sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (sock == INVALID_SOCKET_NATIVE) {
         receiver->running = 0;
         return -1;
     }
-    
+
+#ifdef _WIN32
     receiver->socket = (d8_socket_t)(void*)(size_t)sock;
+#else
+    receiver->socket = sock;
+#endif
 
     /* Bind to port */
     struct sockaddr_in addr;
@@ -348,14 +384,18 @@ int d8_udp_receiver_start(d8_udp_receiver_t* receiver, d8_u16 port,
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons(port);
-    
+
     if (bind(sock, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
         d8_socket_close(sock);
+#ifdef _WIN32
         receiver->socket = NULL;
+#else
+        receiver->socket = -1;
+#endif
         receiver->running = 0;
         return -1;
     }
-    
+
     /* Set receive timeout */
 #ifdef _WIN32
     {
@@ -371,12 +411,16 @@ int d8_udp_receiver_start(d8_udp_receiver_t* receiver, d8_u16 port,
         setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     }
 #endif
-    
+
     /* Create receiver context */
     d8_udp_receiver_context_t* ctx = (d8_udp_receiver_context_t*)malloc(sizeof(d8_udp_receiver_context_t));
     if (!ctx) {
         d8_socket_close(sock);
+#ifdef _WIN32
         receiver->socket = NULL;
+#else
+        receiver->socket = -1;
+#endif
         receiver->running = 0;
         return -1;
     }
@@ -391,35 +435,48 @@ int d8_udp_receiver_start(d8_udp_receiver_t* receiver, d8_u16 port,
     if (d8_thread_create(&receiver->thread, d8_udp_receiver_thread_func, ctx) != 0) {
         free(ctx);
         d8_socket_close(sock);
+#ifdef _WIN32
         receiver->socket = NULL;
+#else
+        receiver->socket = -1;
+#endif
         receiver->running = 0;
         return -1;
     }
-    
+
     return 0;
 }
 
 void d8_udp_receiver_stop(d8_udp_receiver_t* receiver) {
     if (!receiver || !receiver->running) return;
-    
+
     receiver->running = 0;
-    
+
     /* Shutdown socket to wake up receiver thread */
+#ifdef _WIN32
     if (receiver->socket) {
         socket_native_t sock = (socket_native_t)(size_t)(void*)receiver->socket;
+#else
+    if (receiver->socket >= 0) {
+        socket_native_t sock = receiver->socket;
+#endif
 #ifdef _WIN32
         shutdown(sock, SD_BOTH);
 #else
         shutdown(sock, SHUT_RDWR);
 #endif
         d8_socket_close(sock);
+#ifdef _WIN32
         receiver->socket = NULL;
+#else
+        receiver->socket = -1;
+#endif
     }
-    
+
     /* Wait for thread to finish */
-    if (receiver->thread) {
+    if (D8_THREAD_IS_VALID(receiver->thread)) {
         d8_thread_join(receiver->thread);
-        receiver->thread = NULL;
+        receiver->thread = D8_THREAD_NULL;
     }
 }
 
