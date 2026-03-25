@@ -48,7 +48,6 @@ int d8_vsb_load_from_memory(const d8_u8* data, size_t size, int tagged,
     tape->count = 0;
 
     /* IDE format: 4 bytes per frame (8 channels, 4-bit each) */
-    size_t data_size = tagged ? 4 : 4;
     size_t frame_size = tagged ? 8 : 4;  /* tagged: 4-byte tag + 4-byte data */
 
     if (size < frame_size) {

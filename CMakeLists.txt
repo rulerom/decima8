@@ -40,6 +40,7 @@ add_library(d8_core STATIC
   src/tlv.c
   src/crc32_ieee.c
   src/vsb.c
+  src/udp_io.c
 )
 
 target_include_directories(d8_core PUBLIC

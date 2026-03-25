@@ -334,7 +334,11 @@ int main(int argc, char** argv) {
     /* Open output file if needed */
     FILE* out_file = stdout;
     if (!g_opts.console_only && output_path) {
+#ifdef _MSC_VER
+        fopen_s(&out_file, output_path, "w");
+#else
         out_file = fopen(output_path, "w");
+#endif
         if (!out_file) {
             fprintf(stderr, "Failed to open output file: %s\n", output_path);
             d8_swarm_destroy(swarm);

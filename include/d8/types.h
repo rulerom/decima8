@@ -28,6 +28,16 @@ typedef int8_t    d8_i8;
 typedef int16_t   d8_i16;
 typedef int32_t   d8_i32;
 typedef int64_t   d8_i64;
+typedef size_t    d8_size_t;
+
+/* Platform-specific socket and thread types */
+#ifdef _WIN32
+typedef void*     d8_socket_t;      /* SOCKET (void* for C compatibility) */
+typedef void*     d8_thread_t;      /* HANDLE for thread */
+#else
+typedef int       d8_socket_t;      /* int socket file descriptor */
+typedef void*     d8_thread_t;      /* pthread_t (opaque pointer) */
+#endif
 
 /* ============================================================================
  * Constants
