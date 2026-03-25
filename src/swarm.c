@@ -376,16 +376,16 @@ static void compute_parent_topology(d8_swarm_t* swarm) {
 
 static void write_to_shared_buffer(d8_swarm_t* swarm) {
     if (!swarm || !swarm->shared_buffer) return;
-    
+
     for (size_t t = 0; t < swarm->active_tile_count; t++) {
         d8_i16 thr_i16 = swarm->thr_cur[t];
         d8_u8 thr = clamp15_u8((thr_i16 > 0) ? thr_i16 : 0);
         d8_u8 locked = swarm->locked[t];
         d8_u8 fire = (swarm->snapshot.v_state[t] & 0x04) ? 1 : 0;
-        
-        swarm->shared_buffer->tile_state[t].thr_norm_4bit = thr;
-        swarm->shared_buffer->tile_state[t].locked = locked;
-        swarm->shared_buffer->tile_state[t].fire_event = fire;
+
+        swarm->shared_buffer->tiles[t].thr_cur16 = thr;
+        swarm->shared_buffer->tiles[t].locked_flag = locked;
+        swarm->shared_buffer->tiles[t].fire_event = fire;
     }
 }
 
@@ -615,13 +615,14 @@ static d8_flash_result_t flash_impl(d8_swarm_t* swarm, d8_u32 tag, const d8_u8* 
         
         /* Clamp to i16 */
         swarm->thr_cur[t] = (d8_i16)((thr_tmp < -32768) ? -32768 : ((thr_tmp > 32767) ? 32767 : thr_tmp));
-        
+
         /* FUSE-LOCK by range */
         d8_i16 thr_lo = swarm->thr_lo[t];
         d8_i16 thr_hi = swarm->thr_hi[t];
-        bool range_active = (thr_lo < thr_hi);
-        /* Lock when |thr_cur| >= |thr_lo| (works for both positive and negative weights) */
-        bool in_range = range_active && (swarm->thr_cur[t] >= thr_lo || swarm->thr_cur[t] <= -thr_lo);
+        
+        /* Lock when thr_cur is within [thr_lo, thr_hi] range (or [-thr_hi, -thr_lo] for negative) */
+        bool in_range = (swarm->thr_cur[t] >= thr_lo && swarm->thr_cur[t] <= thr_hi);
+        
         bool has_signal = (delta != 0);
 
         if (swarm->bake_id > 0 && in_range && has_signal) {
@@ -712,9 +713,7 @@ static d8_flash_result_t flash_impl(d8_swarm_t* swarm, d8_u32 tag, const d8_u8* 
         /* Check if thr_cur is in range [thr_lo, thr_hi] */
         d8_i16 thr_lo = swarm->thr_lo[t];
         d8_i16 thr_hi = swarm->thr_hi[t];
-        bool range_active = (thr_lo < thr_hi);
-        /* Lock when thr_cur >= thr_lo (ignore thr_hi for now - thr_cur can exceed it) */
-        bool in_range = range_active && (swarm->thr_cur[t] >= thr_lo);
+        bool in_range = (swarm->thr_cur[t] >= thr_lo && swarm->thr_cur[t] <= thr_hi);
 
         if (!in_range) continue;  /* Tile not in fuse-lock range */
 

@@ -298,8 +298,6 @@ thr_cur16 = (i16)clamp_range(thr_tmp, -32768, 32767)
 
 Если locked_before==1:
 
-- locked_after := 1
-- веса не применяются (passthrough)
 - **Decay применяется** (если decay16>0, thr_cur16 тянется к 0):
 ```
 if (decay16 > 0) {
@@ -307,6 +305,13 @@ if (decay16 > 0) {
   else if (thr_cur16 < 0) thr_cur16 = min(thr_cur16 + decay16, 0)
 }
 ```
+- **Проверка на разлочивание:** после decay проверяем диапазон:
+```
+in_range = (thr_lo16 < thr_hi16) && (thr_lo16 <= thr_cur16) && (thr_cur16 <= thr_hi16)
+locked_after = in_range ? 1 : 0
+```
+- Если locked_after==0 → тайл разлочивается, дети станут ACTIVE==0 в следующем тике.
+- Если locked_after==1 → passthrough, drive_vec=in16.
 
 События:
 

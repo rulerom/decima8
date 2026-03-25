@@ -1,8 +1,8 @@
 /*
  * DECIMA-8 Swarm Benchmark
- * 
+ *
  * Прогон VSB ленты через D8P bake с замером времени цикла
- * 
+ *
  * All rights belong to the ORDEN (c) 2026
  */
 
@@ -19,6 +19,7 @@
 
 #include "d8/swarm.h"
 #include "d8/bake.h"
+#include "d8/vsb.h"
 
 /* ============================================================================
  * Timing
@@ -44,41 +45,6 @@ static double get_time_us(void) {
     return (double)tv.tv_sec * 1000000.0 + (double)tv.tv_usec;
 }
 #endif
-
-/* ============================================================================
- * VSB Loader
- * ============================================================================ */
-
-#define MAX_VSB_FRAMES 10000
-
-typedef struct {
-    uint8_t frames[MAX_VSB_FRAMES][8];
-    size_t count;
-} vsb_tape_t;
-
-static int load_vsb_tape(const char* path, vsb_tape_t* tape) {
-    FILE* f = fopen(path, "rb");
-    if (!f) {
-        fprintf(stderr, "Failed to open VSB file: %s\n", path);
-        return -1;
-    }
-    
-    tape->count = 0;
-    uint8_t buffer[8];
-    
-    while (fread(buffer, 1, 8, f) == 8) {
-        if (tape->count >= MAX_VSB_FRAMES) {
-            fprintf(stderr, "Warning: Max frames reached (%d)\n", MAX_VSB_FRAMES);
-            break;
-        }
-        memcpy(tape->frames[tape->count], buffer, 8);
-        tape->count++;
-    }
-    
-    fclose(f);
-    printf("Loaded %zu frames from %s\n", tape->count, path);
-    return 0;
-}
 
 /* ============================================================================
  * Bake Loader
@@ -120,35 +86,38 @@ typedef struct {
     size_t count;
 } benchmark_stats_t;
 
-static void run_benchmark(d8_swarm_t* swarm, vsb_tape_t* tape, benchmark_stats_t* stats) {
+static void run_benchmark(d8_swarm_t* swarm, const d8_vsb_tape_t* tape, benchmark_stats_t* stats) {
     stats->min_us = 1e9;
     stats->max_us = 0;
     stats->total_us = 0;
     stats->count = 0;
-    
+
     printf("\nRunning benchmark (%zu frames)...\n", tape->count);
-    
+
     for (size_t i = 0; i < tape->count; i++) {
+        d8_u32 frame_tag = tape->frames[i].frame_tag;
+        const d8_u8* vsb_data = tape->frames[i].data;
+
         double start = get_time_us();
-        
-        d8_flash_result_t result = d8_swarm_ev_flash(swarm, (uint32_t)i, tape->frames[i]);
-        
+
+        d8_flash_result_t result = d8_swarm_ev_flash(swarm, frame_tag, vsb_data);
+
         double end = get_time_us();
         double cycle_time = end - start;
-        
+
         if (result.st.code != D8_STATUS_OK) {
-            fprintf(stderr, "Flash failed at frame %zu: %s\n", i, result.st.msg);
+            fprintf(stderr, "Flash failed at frame %zu (tag=%u): %s\n", i, frame_tag, result.st.msg);
             continue;
         }
-        
+
         if (cycle_time < stats->min_us) stats->min_us = cycle_time;
         if (cycle_time > stats->max_us) stats->max_us = cycle_time;
         stats->total_us += cycle_time;
         stats->count++;
-        
+
         /* Progress indicator */
         if ((i + 1) % 100 == 0) {
-            printf("  Progress: %zu/%zu frames (%.1f%%)\n", 
+            printf("  Progress: %zu/%zu frames (%.1f%%)\n",
                    i + 1, tape->count, (double)(i + 1) * 100.0 / (double)tape->count);
         }
     }
@@ -205,8 +174,8 @@ int main(int argc, char** argv) {
     printf("========================================\n\n");
     
     /* Load VSB tape */
-    vsb_tape_t tape;
-    if (load_vsb_tape(vsb_path, &tape) != 0) {
+    d8_vsb_tape_t tape;
+    if (d8_vsb_load(vsb_path, &tape) != 0) {
         return 1;
     }
     
