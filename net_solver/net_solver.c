@@ -84,9 +84,21 @@ typedef struct {
  * Print activation log (verbose mode, level 2)
  * ============================================================================ */
 
-static void print_activation_log(net_solver_t* solver, d8_u32 frame_tag, const d8_u8* vsb) {
-    printf("[Frame %u] VSB IN: %u|%u|%u|%u|%u|%u|%u|%u\n",
-           frame_tag, vsb[0], vsb[1], vsb[2], vsb[3], vsb[4], vsb[5], vsb[6], vsb[7]);
+static void print_activation_log(net_solver_t* solver, const d8_udp_packet_t* packet, const d8_u8* vsb) {
+    printf("[Frame %u] VSB IN: %u|%u|%u|%u|%u|%u|%u|%u",
+           packet->frame_tag, vsb[0], vsb[1], vsb[2], vsb[3], vsb[4], vsb[5], vsb[6], vsb[7]);
+    
+    /* Show pattern_id if present */
+    if (packet->pattern_id != 0) {
+        printf(" pattern=%u", packet->pattern_id);
+    }
+    
+    /* Show reset mask if present */
+    if (packet->reset_mask16 != 0 && packet->reset_mask16 != 0xFFFF) {
+        printf(" reset=0x%04X", packet->reset_mask16);
+    }
+    
+    printf("\n");
     
     /* Print thr_cur for tiles with pattern_id != 0 */
     printf("  Active tiles (thr_cur != 0):\n");
@@ -120,7 +132,16 @@ static void on_udp_packet_received(const d8_udp_packet_t* packet, void* user_dat
     
     /* Verbose level 2: log input and activation */
     if (solver->config.verbose >= 2) {
-        print_activation_log(solver, packet->frame_tag, packet->bus16);
+        print_activation_log(solver, packet, packet->bus16);
+    }
+    
+    /* Execute reset if reset_mask16 is present */
+    if (packet->reset_mask16 != 0 && packet->reset_mask16 != 0xFFFF) {
+        d8_swarm_ev_reset_domain(solver->swarm, packet->reset_mask16);
+        
+        if (solver->config.verbose >= 2) {
+            printf("  RESET domains: 0x%04X\n", packet->reset_mask16);
+        }
     }
     
     /* Execute flash with bus16 directly as VSB ingress */
@@ -189,8 +210,8 @@ static void on_udp_packet_received(const d8_udp_packet_t* packet, void* user_dat
         d8_swarm_ev_bake(solver->swarm, solver->bake_data, solver->bake_size);
         solver->resets_performed++;
         
-        if (solver->config.verbose >= 2) {
-            printf("  RESET: swarm reset and bake reapplied\n");
+        if (solver->config.verbose >= 1) {
+            printf("  RESET: swarm full reset and bake reapplied\n");
         }
     }
 }
