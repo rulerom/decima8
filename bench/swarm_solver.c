@@ -210,7 +210,7 @@ static void print_stats(solver_stats_t* stats) {
     printf("Total collisions: %zu\n", stats->total_collisions);
     printf("Total time: %.2f ms\n", stats->total_time_us / 1000.0);
     if (stats->total_solutions > 0) {
-        printf("Avg time per frame: %.1f us\n",
+        printf("Avg time per solution: %.1f us\n",
                stats->total_time_us / (double)stats->total_solutions);
     }
     printf("========================================\n");

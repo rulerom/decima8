@@ -84,13 +84,19 @@ typedef struct {
     double max_us;
     double total_us;
     size_t count;
+    size_t solutions;      /* Number of solutions found */
+    size_t collisions;     /* Number of collisions */
+    int reset_on_solution; /* Reset swarm after each solution */
 } benchmark_stats_t;
 
-static void run_benchmark(d8_swarm_t* swarm, const d8_vsb_tape_t* tape, benchmark_stats_t* stats) {
+static void run_benchmark(d8_swarm_t* swarm, const d8_vsb_tape_t* tape, benchmark_stats_t* stats,
+                          const uint8_t* bake_data, size_t bake_size) {
     stats->min_us = 1e9;
     stats->max_us = 0;
     stats->total_us = 0;
     stats->count = 0;
+    stats->solutions = 0;
+    stats->collisions = 0;
 
     printf("\nRunning benchmark (%zu frames)...\n", tape->count);
 
@@ -110,6 +116,26 @@ static void run_benchmark(d8_swarm_t* swarm, const d8_vsb_tape_t* tape, benchmar
             continue;
         }
 
+        /* Count solutions and collisions */
+        const d8_view_snapshot_t* snapshot = d8_swarm_get_snapshot(swarm);
+        int has_solution = 0;
+        if (snapshot) {
+            for (d8_u8 d = 0; d < D8_K_DOMAINS; d++) {
+                if (snapshot->winner_tile_id[d] != 0xFFFF) {
+                    stats->solutions++;
+                    has_solution = 1;
+                }
+                if (snapshot->collide_mask16 & (1 << d)) {
+                    stats->collisions++;
+                }
+            }
+        }
+
+        /* Reset swarm if option is set and solution found */
+        if (stats->reset_on_solution && has_solution) {
+            d8_swarm_full_reset(swarm);
+        }
+
         if (cycle_time < stats->min_us) stats->min_us = cycle_time;
         if (cycle_time > stats->max_us) stats->max_us = cycle_time;
         stats->total_us += cycle_time;
@@ -123,25 +149,35 @@ static void run_benchmark(d8_swarm_t* swarm, const d8_vsb_tape_t* tape, benchmar
     }
 }
 
-static void print_stats(benchmark_stats_t* stats) {
+static void print_stats(benchmark_stats_t* stats, size_t active_tile_count) {
     if (stats->count == 0) {
         printf("No frames processed\n");
         return;
     }
-    
+
     double avg_us = stats->total_us / (double)stats->count;
     double fps = 1000000.0 / avg_us;
-    
+    double avg_per_solution = stats->solutions > 0 ? stats->total_us / (double)stats->solutions : 0;
+
     printf("\n");
     printf("========================================\n");
     printf("Benchmark Results\n");
     printf("========================================\n");
-    printf("Frames processed: %zu\n", stats->count);
+    printf("Swarm size:       %zu tiles\n", active_tile_count);
+    printf("Frames (cycles):  %zu\n", stats->count);
+    printf("Solutions found:  %zu\n", stats->solutions);
+    printf("Collisions:       %zu\n", stats->collisions);
+    if (stats->reset_on_solution) {
+        printf("Resets:           %zu\n", stats->solutions);
+    }
     printf("Cycle Time:\n");
-    printf("  Min:  %.1f μs (%.1f FPS)\n", stats->min_us, 1000000.0 / stats->min_us);
-    printf("  Max:  %.1f μs (%.1f FPS)\n", stats->max_us, 1000000.0 / stats->max_us);
-    printf("  Avg:  %.1f μs (%.1f FPS)\n", avg_us, fps);
-    printf("Total time: %.2f ms\n", stats->total_us / 1000.0);
+    printf("  Min:  %.1f us (%.1f FPS)\n", stats->min_us, 1000000.0 / stats->min_us);
+    printf("  Max:  %.1f us (%.1f FPS)\n", stats->max_us, 1000000.0 / stats->max_us);
+    printf("  Avg:  %.1f us (%.1f FPS)\n", avg_us, fps);
+    printf("Total time:       %.2f ms\n", stats->total_us / 1000.0);
+    if (stats->solutions > 0) {
+        printf("Avg per solution: %.1f us\n", avg_per_solution);
+    }
     printf("========================================\n");
 }
 
@@ -150,7 +186,10 @@ static void print_stats(benchmark_stats_t* stats) {
  * ============================================================================ */
 
 static void print_usage(const char* prog) {
-    printf("Usage: %s <vsb_file> <d8p_file>\n", prog);
+    printf("Usage: %s [options] <vsb_file> <d8p_file>\n", prog);
+    printf("\n");
+    printf("Options:\n");
+    printf("  -R          Reset swarm after each solution\n");
     printf("\n");
     printf("Arguments:\n");
     printf("  vsb_file  - VSB tape file (e.g., tape.vsb)\n");
@@ -158,20 +197,41 @@ static void print_usage(const char* prog) {
     printf("\n");
     printf("Example:\n");
     printf("  %s tape.vsb bake.d8p\n", prog);
+    printf("  %s -R tape.vsb bake.d8p\n", prog);
 }
 
 int main(int argc, char** argv) {
-    if (argc != 3) {
+    /* Parse options */
+    int reset_on_solution = 0;
+    int arg_start = 1;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-R") == 0) {
+            reset_on_solution = 1;
+            arg_start = i + 1;
+        } else if (argv[i][0] == '-') {
+            fprintf(stderr, "Unknown option: %s\n", argv[i]);
+            print_usage(argv[0]);
+            return 1;
+        } else {
+            break;
+        }
+    }
+
+    int remaining_args = argc - arg_start;
+    if (remaining_args != 2) {
         print_usage(argv[0]);
         return 1;
     }
-    
-    const char* vsb_path = argv[1];
-    const char* d8p_path = argv[2];
-    
+
+    const char* vsb_path = argv[arg_start];
+    const char* d8p_path = argv[arg_start + 1];
+
     printf("========================================\n");
     printf("Decima-8 Swarm Benchmark\n");
     printf("========================================\n\n");
+    printf("Options:\n");
+    printf("  Reset on solution: %s\n", reset_on_solution ? "yes" : "no");
+    printf("\n");
     
     /* Load VSB tape */
     d8_vsb_tape_t tape;
@@ -208,10 +268,11 @@ int main(int argc, char** argv) {
     
     /* Run benchmark */
     benchmark_stats_t stats;
-    run_benchmark(swarm, &tape, &stats);
-    
+    stats.reset_on_solution = reset_on_solution;
+    run_benchmark(swarm, &tape, &stats, bake_data, bake_size);
+
     /* Print results */
-    print_stats(&stats);
+    print_stats(&stats, d8_swarm_get_active_tile_count(swarm));
     
     /* Cleanup */
     d8_swarm_destroy(swarm);
