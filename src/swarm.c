@@ -26,7 +26,7 @@ struct timespec {
     long tv_nsec;
 };
 
-static inline int clock_gettime(int clk_id, struct timespec* ts) {
+static inline int d8_clock_gettime(int clk_id, struct timespec* ts) {
     (void)clk_id;
     LARGE_INTEGER freq, count;
     QueryPerformanceFrequency(&freq);
@@ -40,19 +40,19 @@ static inline int clock_gettime(int clk_id, struct timespec* ts) {
 #include <time.h>
 #include <sys/time.h>
 
-/* Fallback for systems without clock_gettime */
-#if defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 199309L
-/* clock_gettime is available */
+/* Prefer the native POSIX timer when the SDK exposes it. */
+#if defined(__APPLE__) || (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 199309L)
 #ifndef CLOCK_MONOTONIC
 #define CLOCK_MONOTONIC CLOCK_REALTIME
 #endif
+#define d8_clock_gettime clock_gettime
 #else
 /* Use gettimeofday as fallback */
 #ifndef CLOCK_MONOTONIC
 #define CLOCK_MONOTONIC 0
 #endif
 
-static inline int clock_gettime(int clk_id, struct timespec* ts) {
+static inline int d8_clock_gettime(int clk_id, struct timespec* ts) {
     (void)clk_id;
     struct timeval tv;
     gettimeofday(&tv, NULL);
@@ -425,7 +425,7 @@ static d8_flash_result_t flash_impl(d8_swarm_t* swarm, d8_u32 tag, const d8_u8* 
     
     /* Measure start time */
     struct timespec start_time, end_time;
-    clock_gettime(CLOCK_MONOTONIC, &start_time);
+    d8_clock_gettime(CLOCK_MONOTONIC, &start_time);
 
     swarm->flash_in_progress = true;
     
@@ -771,7 +771,7 @@ static d8_flash_result_t flash_impl(d8_swarm_t* swarm, d8_u32 tag, const d8_u8* 
      * Cycle time statistics
      * =================================================================== */
     
-    clock_gettime(CLOCK_MONOTONIC, &end_time);
+    d8_clock_gettime(CLOCK_MONOTONIC, &end_time);
     d8_u32 cycle_time_us = (d8_u32)((end_time.tv_nsec - start_time.tv_nsec) / 1000 + (end_time.tv_sec - start_time.tv_sec) * 1000000);
     
     swarm->snapshot.cycle_time_us = cycle_time_us;
