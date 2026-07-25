@@ -12,6 +12,108 @@
 #include "d8/swarm.h"
 #include "bake_gen.h"
 
+static int expect(int cond, const char* msg) {
+    if (!cond) {
+        fprintf(stderr, "EXPECT failed: %s\n", msg);
+        return 1;
+    }
+    return 0;
+}
+
+static int bake_swarm(d8_swarm_t* swarm, int16_t thr_lo, int16_t thr_hi) {
+    uint8_t bake_data[240000];
+    size_t bake_size = 0;
+    if (d8_bake_gen_custom(bake_data, &bake_size, 256, thr_lo, thr_hi, 0) != 0) {
+        return -1;
+    }
+    d8_status_t st = d8_swarm_ev_bake(swarm, bake_data, bake_size);
+    return st.code == D8_STATUS_OK ? 0 : -1;
+}
+
+static void set_all_weights(d8_swarm_t* swarm, size_t tile_id, uint8_t mag) {
+    for (size_t i = 0; i < 64; i++) {
+        d8_swarm_set_tile_weight_sign(swarm, tile_id, i, true);
+        d8_swarm_set_tile_weight_mag(swarm, tile_id, i, mag);
+    }
+}
+
+static int test_strict_ingress(void) {
+    d8_swarm_t* swarm = d8_swarm_create();
+    if (expect(swarm != NULL, "create swarm")) return 1;
+    if (expect(bake_swarm(swarm, 1, 100) == 0, "bake strict ingress swarm")) return 1;
+
+    uint8_t ingress[8] = {16, 0, 0, 0, 0, 0, 0, 0};
+    d8_flash_result_t result = d8_swarm_ev_flash(swarm, 1, ingress);
+    int failed = expect(result.st.code == D8_STATUS_BAD_INGRESS_LEVEL, "ingress > 15 must fail");
+    d8_swarm_destroy(swarm);
+    return failed;
+}
+
+static int test_winner_collide_autoreset(void) {
+    d8_swarm_t* swarm = d8_swarm_create();
+    if (expect(swarm != NULL, "create swarm")) return 1;
+    if (expect(bake_swarm(swarm, 1, 1000) == 0, "bake collision swarm")) return 1;
+
+    d8_swarm_set_tile_params_direct(swarm, 0, 1, 1000, 0, 0, 1);
+    d8_swarm_set_tile_params_direct(swarm, 1, 1, 1000, 0, 0, 2);
+    d8_swarm_set_tile_pattern_id_direct(swarm, 0, 10);
+    d8_swarm_set_tile_pattern_id_direct(swarm, 1, 11);
+    d8_swarm_set_tile_routing_masks(swarm, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1);
+    d8_swarm_set_tile_routing_masks(swarm, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1);
+    d8_swarm_set_tile_reset_on_fire_mask(swarm, 1, 0x0001);
+    set_all_weights(swarm, 0, 7);
+    set_all_weights(swarm, 1, 7);
+
+    uint8_t ingress[8] = {1, 1, 1, 1, 1, 1, 1, 1};
+    d8_flash_result_t result = d8_swarm_ev_flash(swarm, 10, ingress);
+    const d8_view_snapshot_t* snap = d8_swarm_get_snapshot(swarm);
+
+    int failed = 0;
+    failed |= expect(result.st.code == D8_STATUS_OK, "collision flash must succeed");
+    failed |= expect((snap->collide_mask16 & 0x0001) != 0, "domain 0 collision must be reported");
+    failed |= expect(snap->winner_tile_id[0] == 1, "higher priority tile must win");
+    failed |= expect(snap->winner_pattern_id[0] == 11, "winner pattern id must match");
+    failed |= expect(snap->fired_cnt_sat[0] == 2, "two fired tiles must be counted");
+    failed |= expect(snap->auto_reset_mask16 == 0x0001, "winner reset mask must be exported");
+    failed |= expect(!d8_swarm_get_tile_locked(swarm, 0), "auto-reset must clear non-winner in reset domain");
+    failed |= expect(d8_swarm_get_tile_locked(swarm, 1), "auto-reset must keep winner locked");
+
+    d8_swarm_destroy(swarm);
+    return failed ? 1 : 0;
+}
+
+static int test_locked_ancestor_write(void) {
+    d8_swarm_t* swarm = d8_swarm_create();
+    if (expect(swarm != NULL, "create swarm")) return 1;
+    if (expect(bake_swarm(swarm, 1, 1000) == 0, "bake ancestor-write swarm")) return 1;
+
+    d8_swarm_set_tile_params_direct(swarm, 0, 1, 1000, 0, 0, 1);
+    d8_swarm_set_tile_params_direct(swarm, 1, 1, 1000, 0, 0, 1);
+    d8_swarm_set_tile_pattern_id_direct(swarm, 0, 10);
+    d8_swarm_set_tile_routing_masks(swarm, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1);
+    d8_swarm_set_tile_routing_masks(swarm, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0);
+    set_all_weights(swarm, 0, 7);
+    set_all_weights(swarm, 1, 7);
+
+    uint8_t ingress[8] = {1, 1, 1, 1, 1, 1, 1, 1};
+    d8_flash_result_t first = d8_swarm_ev_flash(swarm, 20, ingress);
+    d8_flash_result_t result = d8_swarm_ev_flash(swarm, 21, ingress);
+
+    int bus_nonzero = 0;
+    for (size_t i = 0; i < 8; i++) {
+        if (result.readout16[i] != 0) bus_nonzero = 1;
+    }
+
+    int failed = 0;
+    failed |= expect(first.st.code == D8_STATUS_OK, "parent-lock flash must succeed");
+    failed |= expect(result.st.code == D8_STATUS_OK, "ancestor-write flash must succeed");
+    failed |= expect(d8_swarm_get_tile_locked(swarm, 0), "parent tile must lock");
+    failed |= expect(bus_nonzero, "BUS_W child must write when parent is locked ancestor");
+
+    d8_swarm_destroy(swarm);
+    return failed ? 1 : 0;
+}
+
 int main(void) {
     printf("========================================\n");
     printf("DECIMA-8 Flash Test\n");
@@ -67,6 +169,19 @@ int main(void) {
         } else {
             printf("OK (cycle_time=%d μs)\n", (int)result.st.code);
         }
+    }
+
+    if (test_strict_ingress()) {
+        d8_swarm_destroy(swarm);
+        return 1;
+    }
+    if (test_winner_collide_autoreset()) {
+        d8_swarm_destroy(swarm);
+        return 1;
+    }
+    if (test_locked_ancestor_write()) {
+        d8_swarm_destroy(swarm);
+        return 1;
     }
     
     /* Cleanup */

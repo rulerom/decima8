@@ -26,7 +26,7 @@ struct timespec {
     long tv_nsec;
 };
 
-static inline int d8_clock_gettime(int clk_id, struct timespec* ts) {
+static inline int clock_gettime(int clk_id, struct timespec* ts) {
     (void)clk_id;
     LARGE_INTEGER freq, count;
     QueryPerformanceFrequency(&freq);
@@ -40,26 +40,8 @@ static inline int d8_clock_gettime(int clk_id, struct timespec* ts) {
 #include <time.h>
 #include <sys/time.h>
 
-/* Prefer the native POSIX timer when the SDK exposes it. */
-#if defined(__APPLE__) || (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 199309L)
 #ifndef CLOCK_MONOTONIC
 #define CLOCK_MONOTONIC CLOCK_REALTIME
-#endif
-#define d8_clock_gettime clock_gettime
-#else
-/* Use gettimeofday as fallback */
-#ifndef CLOCK_MONOTONIC
-#define CLOCK_MONOTONIC 0
-#endif
-
-static inline int d8_clock_gettime(int clk_id, struct timespec* ts) {
-    (void)clk_id;
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    ts->tv_sec = tv.tv_sec;
-    ts->tv_nsec = tv.tv_usec * 1000;
-    return 0;
-}
 #endif
 #endif
 
@@ -202,16 +184,14 @@ static inline void simd_clamp15_8_u32(d8_u8* dst, d8_u8* clip_mask, const d8_u32
  * Forward declarations
  * ============================================================================ */
 
-static bool is_active_tile(const d8_swarm_t* swarm, size_t tile_id);
 static d8_u8 thr_norm_4bit(d8_i16 thr_cur, d8_i16 thr_lo, d8_i16 thr_hi);
 static d8_u8 clamp15_u8(int val);
 static void compute_in16(d8_swarm_t* swarm, size_t tile_id, const d8_u8* vsb_ingress, bool is_active);
 static void compute_row_raw(d8_swarm_t* swarm, size_t tile_id);
 static d8_i16 compute_delta_raw(d8_swarm_t* swarm, size_t tile_id);
-static void compute_domain_connectivity(d8_swarm_t* swarm);
-static void compute_parent_topology(d8_swarm_t* swarm);
 static void write_to_shared_buffer(d8_swarm_t* swarm);
 static d8_flash_result_t flash_impl(d8_swarm_t* swarm, d8_u32 tag, const d8_u8* vsb_ingress16);
+static bool has_locked_write_source(const d8_swarm_t* swarm, size_t tile_id);
 
 /* ============================================================================
  * Creation / Destruction
@@ -258,15 +238,6 @@ void d8_swarm_full_reset(d8_swarm_t* swarm) {
 /* ============================================================================
  * Helper functions
  * ============================================================================ */
-
-static bool is_active_tile(const d8_swarm_t* swarm, size_t tile_id) {
-    if (!swarm || tile_id >= D8_K_TILE_COUNT) return false;
-    
-    size_t x = tile_id % swarm->active_tile_w;
-    size_t y = tile_id / swarm->active_tile_w;
-    
-    return (x < swarm->active_tile_w && y < swarm->active_tile_h);
-}
 
 static d8_u8 clamp15_u8(int val) {
     return (d8_u8)((val < 0) ? 0 : ((val > 15) ? 15 : val));
@@ -372,20 +343,6 @@ static d8_i16 compute_delta_raw(d8_swarm_t* swarm, size_t tile_id) {
     return delta;
 }
 
-/* ============================================================================
- * Stub topology functions
- * ============================================================================ */
-
-static void compute_domain_connectivity(d8_swarm_t* swarm) {
-    (void)swarm;
-    /* TODO: Implement domain connectivity */
-}
-
-static void compute_parent_topology(d8_swarm_t* swarm) {
-    (void)swarm;
-    /* TODO: Implement parent topology */
-}
-
 static void write_to_shared_buffer(d8_swarm_t* swarm) {
     if (!swarm || !swarm->shared_buffer) return;
 
@@ -399,6 +356,53 @@ static void write_to_shared_buffer(d8_swarm_t* swarm) {
         swarm->shared_buffer->tiles[t].locked_flag = locked;
         swarm->shared_buffer->tiles[t].fire_event = fire;
     }
+}
+
+static bool has_locked_write_source(const d8_swarm_t* swarm, size_t tile_id) {
+    if (!swarm || tile_id >= swarm->active_tile_count) return false;
+    if (swarm->locked[tile_id]) return true;
+
+    const size_t tile_w = swarm->active_tile_w;
+    const size_t x = tile_id % tile_w;
+    const bool has_n = tile_id >= tile_w;
+    const bool has_s = tile_id + tile_w < swarm->active_tile_count;
+    const bool has_w = x > 0;
+    const bool has_e = x + 1 < tile_w && tile_id + 1 < swarm->active_tile_count;
+
+    if (has_n) {
+        size_t n = tile_id - tile_w;
+        if (swarm->maskS[n] && swarm->locked[n]) return true;
+    }
+    if (has_s) {
+        size_t n = tile_id + tile_w;
+        if (swarm->maskN[n] && swarm->locked[n]) return true;
+    }
+    if (has_w) {
+        size_t n = tile_id - 1;
+        if (swarm->maskE[n] && swarm->locked[n]) return true;
+    }
+    if (has_e) {
+        size_t n = tile_id + 1;
+        if (swarm->maskW[n] && swarm->locked[n]) return true;
+    }
+    if (has_n && has_e) {
+        size_t n = tile_id - tile_w + 1;
+        if (swarm->maskSW[n] && swarm->locked[n]) return true;
+    }
+    if (has_s && has_e) {
+        size_t n = tile_id + tile_w + 1;
+        if (n < swarm->active_tile_count && swarm->maskNW[n] && swarm->locked[n]) return true;
+    }
+    if (has_s && has_w) {
+        size_t n = tile_id + tile_w - 1;
+        if (n < swarm->active_tile_count && swarm->maskNE[n] && swarm->locked[n]) return true;
+    }
+    if (has_n && has_w) {
+        size_t n = tile_id - tile_w - 1;
+        if (swarm->maskSE[n] && swarm->locked[n]) return true;
+    }
+
+    return false;
 }
 
 /* ============================================================================
@@ -425,7 +429,7 @@ static d8_flash_result_t flash_impl(d8_swarm_t* swarm, d8_u32 tag, const d8_u8* 
     
     /* Measure start time */
     struct timespec start_time, end_time;
-    d8_clock_gettime(CLOCK_MONOTONIC, &start_time);
+    clock_gettime(CLOCK_MONOTONIC, &start_time);
 
     swarm->flash_in_progress = true;
     
@@ -436,10 +440,17 @@ static d8_flash_result_t flash_impl(d8_swarm_t* swarm, d8_u32 tag, const d8_u8* 
     swarm->snapshot.flags32_last = 0;
     swarm->snapshot.bus_clip_mask8 = 0;
     memset(swarm->snapshot.in_clip_bits, 0, sizeof(swarm->snapshot.in_clip_bits));
+    swarm->snapshot.domains_fired_mask16 = 0;
+    memset(swarm->fire, 0, sizeof(swarm->fire));
     
     /* ===================================================================
      * PHASE 1: PHASE_READ - OPTIMIZED MULTI-PASS ACTIVATION
      * =================================================================== */
+
+    /* Take snapshot of locked_before before ACTIVE closure. */
+    for (size_t t = 0; t < swarm->active_tile_count; t++) {
+        swarm->locked_before[t] = swarm->locked[t];
+    }
 
     /* Reset cached activation flags */
     memset(swarm->bus_r_allowed, 0, swarm->active_tile_count);
@@ -463,7 +474,7 @@ static d8_flash_result_t flash_impl(d8_swarm_t* swarm, d8_u32 tag, const d8_u8* 
         
         for (size_t t = 0; t < swarm->active_tile_count; t++) {
             /* Skip if not active or not locked */
-            if (!swarm->active[t] || !swarm->locked[t]) continue;
+            if (!swarm->active[t] || !swarm->locked_before[t]) continue;
 
             /* Activate children directly based on routing masks */
             /* East child */
@@ -515,7 +526,7 @@ static d8_flash_result_t flash_impl(d8_swarm_t* swarm, d8_u32 tag, const d8_u8* 
                 }
             }
             /* NE child */
-            if (swarm->maskNE[t] && (t % tile_w) < tile_w - 1 && t - tile_w + 1 < swarm->active_tile_count) {
+            if (swarm->maskNE[t] && (t % tile_w) < tile_w - 1 && t >= tile_w && t - tile_w + 1 < swarm->active_tile_count) {
                 if (!swarm->active[t - tile_w + 1]) {
                     swarm->bus_r_allowed[t - tile_w + 1] = 1;
                     swarm->active[t - tile_w + 1] = 1;
@@ -533,23 +544,10 @@ static d8_flash_result_t flash_impl(d8_swarm_t* swarm, d8_u32 tag, const d8_u8* 
         }
     }
 
-    /* Take snapshot of locked_before */
-    for (size_t t = 0; t < swarm->active_tile_count; t++) {
-        swarm->locked_before[t] = swarm->locked[t];
-    }
-
     /* Process all active tiles */
-    int first_active_logged = 0;
     for (size_t t = 0; t < swarm->active_tile_count; t++) {
         bool is_active = (swarm->active[t] != 0);
         bool is_locked_before = (swarm->locked_before[t] != 0);
-
-        /* Locked tiles are always "active" for processing (they just don't accumulate) */
-        if (is_locked_before) is_active = 1;
-
-        if (is_active && !first_active_logged) {
-            first_active_logged = 1;
-        }
 
         /* Compute in16 */
         compute_in16(swarm, t, vsb_ingress16, is_active);
@@ -579,28 +577,22 @@ static d8_flash_result_t flash_impl(d8_swarm_t* swarm, d8_u32 tag, const d8_u8* 
             
             swarm->thr_cur[t] = thr;
 
-            /* Check if this tile should unlock (thr_cur fell below thr_lo) */
+            /* Check if this tile should unlock after decay. */
             d8_i16 thr_lo = swarm->thr_lo[t];
             d8_i16 thr_hi = swarm->thr_hi[t];
             bool range_active = (thr_lo < thr_hi);
-            /* Unlock when |thr_cur| < |thr_lo| */
-            bool in_range = range_active && (swarm->thr_cur[t] >= thr_lo || swarm->thr_cur[t] <= -thr_lo);
+            bool in_range = range_active && (thr_lo <= swarm->thr_cur[t]) && (swarm->thr_cur[t] <= thr_hi);
 
             if (!in_range) {
                 swarm->locked[t] = 0;  /* Unlock tile */
                 continue;
             }
 
-            /* Check if this tile has bus_r_allowed (from parent or bake) */
-            /* If not, unlock this tile (cascade unlock) */
-            if (!swarm->bus_r_allowed[t]) {
-                /* Cascade unlock - but NOT for seed tiles (bus_r=1 from bake) */
-                if (!swarm->bus_r[t]) {
-                    swarm->locked[t] = 0;
-                }
+            if (!swarm->bus_r_allowed[t] && !swarm->bus_r[t]) {
+                swarm->locked[t] = 0;
+                continue;
             }
 
-            /* locked_before tile remains locked - preserve locked state */
             swarm->locked[t] = 1;
             
             /* Compute row_out for locked_before tiles (they need to write to BUS) */
@@ -618,6 +610,7 @@ static d8_flash_result_t flash_impl(d8_swarm_t* swarm, d8_u32 tag, const d8_u8* 
         /* Update thr_cur with decay */
         d8_i16 thr_before = swarm->thr_cur[t];
         d8_i64 thr_tmp = (d8_i64)thr_before + (d8_i64)delta;
+        d8_i64 thr_tmp_no_decay = thr_tmp;
         
         /* Decay toward 0 */
         d8_u16 decay16 = swarm->decay16[t];
@@ -636,23 +629,67 @@ static d8_flash_result_t flash_impl(d8_swarm_t* swarm, d8_u32 tag, const d8_u8* 
         d8_i16 thr_lo = swarm->thr_lo[t];
         d8_i16 thr_hi = swarm->thr_hi[t];
         
-        /* Lock when thr_cur is within [thr_lo, thr_hi] range (or [-thr_hi, -thr_lo] for negative) */
-        bool in_range = (swarm->thr_cur[t] >= thr_lo && swarm->thr_cur[t] <= thr_hi);
+        bool range_active = (thr_lo < thr_hi);
+        bool in_range = range_active && (swarm->thr_cur[t] >= thr_lo && swarm->thr_cur[t] <= thr_hi);
+        bool in_range_before_decay = range_active && (thr_tmp_no_decay >= thr_lo && thr_tmp_no_decay <= thr_hi);
         
         bool has_signal = (delta != 0);
+        bool entered_by_decay = (decay16 > 0) && in_range && !in_range_before_decay;
+        bool decay_fuse_only = (swarm->priority[t] == 7);
 
-        if (swarm->bake_id > 0 && in_range && has_signal) {
+        if (swarm->bake_id > 0 && in_range && (decay_fuse_only ? entered_by_decay : (has_signal || entered_by_decay))) {
             swarm->locked[t] = 1;
         }
+        swarm->fire[t] = (!is_locked_before && swarm->locked[t]) ? 1 : 0;
     }
     
     /* ===================================================================
      * PHASE 2: INTERPHASE (winner selection, auto-reset)
      * =================================================================== */
-    
-    /* Simplified: no collision detection for now */
+
+    d8_u16 fired_cnt[D8_K_DOMAINS] = {0};
     swarm->snapshot.collide_mask16 = 0;
     swarm->snapshot.auto_reset_mask16 = 0;
+    swarm->snapshot.domains_fired_mask16 = 0;
+    for (int d = 0; d < (int)D8_K_DOMAINS; d++) {
+        swarm->snapshot.winner_tile_id[d] = 0xFFFF;
+        swarm->snapshot.winner_pattern_id[d] = 0;
+        swarm->snapshot.winner_priority[d] = 0;
+        swarm->snapshot.fired_cnt_sat[d] = 0;
+        swarm->snapshot.reset_mask_from_winner[d] = 0;
+    }
+
+    for (size_t t = 0; t < swarm->active_tile_count; t++) {
+        if (!swarm->fire[t] || swarm->pattern_id[t] == 0) continue;
+
+        d8_u8 d = swarm->domain_id[t];
+        if (d >= D8_K_DOMAINS) continue;
+
+        fired_cnt[d]++;
+        swarm->snapshot.domains_fired_mask16 |= (d8_u16)(1u << d);
+        if (fired_cnt[d] >= 2) {
+            swarm->snapshot.collide_mask16 |= (d8_u16)(1u << d);
+        }
+
+        d8_u16 cur_winner = swarm->snapshot.winner_tile_id[d];
+        d8_u8 pri = swarm->priority[t];
+        d8_u8 cur_pri = (cur_winner == 0xFFFF) ? 0 : swarm->priority[cur_winner];
+        if (cur_winner == 0xFFFF || pri > cur_pri || (pri == cur_pri && t < cur_winner)) {
+            swarm->snapshot.winner_tile_id[d] = (d8_u16)t;
+            swarm->snapshot.winner_pattern_id[d] = swarm->pattern_id[t];
+            swarm->snapshot.winner_priority[d] = pri;
+        }
+    }
+
+    for (int d = 0; d < (int)D8_K_DOMAINS; d++) {
+        swarm->snapshot.fired_cnt_sat[d] = (fired_cnt[d] > 255) ? 255 : (d8_u8)fired_cnt[d];
+        d8_u16 winner = swarm->snapshot.winner_tile_id[d];
+        if (winner != 0xFFFF) {
+            d8_u16 reset_mask = swarm->reset_on_fire_mask16[winner];
+            swarm->snapshot.reset_mask_from_winner[d] = reset_mask;
+            swarm->snapshot.auto_reset_mask16 |= reset_mask;
+        }
+    }
     
     /* ===================================================================
      * PHASE 3: PHASE_WRITE
@@ -665,7 +702,7 @@ static d8_flash_result_t flash_impl(d8_swarm_t* swarm, d8_u32 tag, const d8_u8* 
         if (!swarm->bus_w[t]) continue;
 
         /* Check if tile can write (locked self or locked ancestor) */
-        bool can_write = (swarm->locked[t] != 0);
+        bool can_write = has_locked_write_source(swarm, t);
         if (!can_write) continue;
 
         /* Drive selection: locked tile writes row_out (VSB × weights) to BUS */
@@ -706,42 +743,6 @@ static d8_flash_result_t flash_impl(d8_swarm_t* swarm, d8_u32 tag, const d8_u8* 
     }
 
     /* ===================================================================
-     * WINNER SELECTION (for each domain, find locked tile with highest thr_cur)
-     * =================================================================== */
-
-    /* Initialize winners to 0xFFFF (no winner) */
-    for (int d = 0; d < 16; d++) {
-        swarm->snapshot.winner_tile_id[d] = 0xFFFF;
-        swarm->snapshot.winner_pattern_id[d] = 0;
-        swarm->snapshot.fired_cnt_sat[d] = 0;
-        swarm->snapshot.reset_mask_from_winner[d] = 0;
-    }
-
-    /* Find winner for each domain */
-    for (size_t t = 0; t < swarm->active_tile_count; t++) {
-        d8_u8 d = swarm->domain_id[t];
-        if (d >= 16) continue;
-
-        /* Skip tiles with pattern_id=0 - they are intermediate/relay tiles, not final winners */
-        if (swarm->pattern_id[t] == 0) continue;
-
-        /* Check if thr_cur is in range [thr_lo, thr_hi] */
-        d8_i16 thr_lo = swarm->thr_lo[t];
-        d8_i16 thr_hi = swarm->thr_hi[t];
-        bool in_range = (swarm->thr_cur[t] >= thr_lo && swarm->thr_cur[t] <= thr_hi);
-
-        if (!in_range) continue;  /* Tile not in fuse-lock range */
-
-        /* Check if this tile has higher thr_cur than current winner */
-        d8_u16 current_winner = swarm->snapshot.winner_tile_id[d];
-
-        if (current_winner == 0xFFFF || swarm->thr_cur[t] > swarm->thr_cur[current_winner]) {
-            swarm->snapshot.winner_tile_id[d] = (d8_u16)t;
-            swarm->snapshot.winner_pattern_id[d] = swarm->pattern_id[t];
-        }
-    }
-
-    /* ===================================================================
      * FLAGS32_LAST
      * =================================================================== */
     
@@ -754,6 +755,23 @@ static d8_flash_result_t flash_impl(d8_swarm_t* swarm, d8_u32 tag, const d8_u8* 
     flags |= ((d8_u32)swarm->snapshot.collide_mask16 << 16);
     
     swarm->snapshot.flags32_last = flags;
+
+    if (swarm->snapshot.auto_reset_mask16 != 0) {
+        for (size_t t = 0; t < swarm->active_tile_count; t++) {
+            d8_u8 d = swarm->domain_id[t];
+            bool is_winner = false;
+            for (int wd = 0; wd < (int)D8_K_DOMAINS; wd++) {
+                if (swarm->snapshot.winner_tile_id[wd] == (d8_u16)t) {
+                    is_winner = true;
+                    break;
+                }
+            }
+            if ((swarm->snapshot.auto_reset_mask16 & (d8_u16)(1u << d)) == 0) continue;
+            if (is_winner) continue;
+            swarm->thr_cur[t] = 0;
+            swarm->locked[t] = 0;
+        }
+    }
     
     /* ===================================================================
      * Update v_state for all tiles
@@ -771,7 +789,7 @@ static d8_flash_result_t flash_impl(d8_swarm_t* swarm, d8_u32 tag, const d8_u8* 
      * Cycle time statistics
      * =================================================================== */
     
-    d8_clock_gettime(CLOCK_MONOTONIC, &end_time);
+    clock_gettime(CLOCK_MONOTONIC, &end_time);
     d8_u32 cycle_time_us = (d8_u32)((end_time.tv_nsec - start_time.tv_nsec) / 1000 + (end_time.tv_sec - start_time.tv_sec) * 1000000);
     
     swarm->snapshot.cycle_time_us = cycle_time_us;
@@ -810,6 +828,20 @@ d8_flash_result_t d8_swarm_ev_flash(d8_swarm_t* swarm, d8_u32 tag, const d8_u8 v
         d8_flash_result_t res = {0};
         res.st = D8_STATUS_MAKE(D8_STATUS_NOT_BAKED, 0, "NULL");
         return res;
+    }
+
+    if (!swarm->bake_applied) {
+        d8_flash_result_t res = {0};
+        res.st = D8_STATUS_MAKE(D8_STATUS_NOT_BAKED, 0, "NotBaked");
+        return res;
+    }
+
+    for (size_t i = 0; i < D8_K_LANES; i++) {
+        if (vsb_ingress16[i] > 15) {
+            d8_flash_result_t res = {0};
+            res.st = D8_STATUS_MAKE(D8_STATUS_BAD_INGRESS_LEVEL, vsb_ingress16[i], "Ingress must be 0..15");
+            return res;
+        }
     }
     
     /* Double-strait bake: two flashes, return second result */

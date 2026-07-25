@@ -13,6 +13,12 @@
 #include <stdint.h>
 #include <signal.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
 #include "d8/swarm.h"
 #include "d8/bake.h"
 #include "d8/udp_io.h"

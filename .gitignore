@@ -40,5 +40,3 @@ DartConfiguration.tcl
 
 # Dependencies (подключаются как submodule)
 deps/
-/.qwen
-/cpp

@@ -31,7 +31,7 @@ extern "C" {
 
 #define D8_VSB_FRAME_SIZE 4U   /* 4 bytes per frame (IDE format) */
 #define D8_VSB_TAGGED_FRAME_SIZE 8U  /* 4-byte tag + 4-byte data */
-#define D8_VSB_MAX_FRAMES 10000U
+#define D8_VSB_MAX_FRAMES 200000U
 
 /* ============================================================================
  * VSB Frame structure

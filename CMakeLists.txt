@@ -22,6 +22,8 @@ endif()
 option(D8_BUILD_TESTS     "Build unit tests" ON)
 option(D8_BUILD_EXAMPLES  "Build examples" ON)
 option(D8_BUILD_BENCHMARKS "Build benchmarks" ON)
+option(D8_BUILD_NET_SOLVER "Build UDP network solver" ON)
+option(D8_BUILD_AGENT_CLI "Build agent-oriented batch CLI" ON)
 
 # -------- Compiler flags --------
 if (MSVC)
@@ -93,6 +95,19 @@ if (D8_BUILD_BENCHMARKS)
   # Bake generator benchmark
   add_executable(d8_bake_gen_bench bench/bake_gen_bench.c)
   target_link_libraries(d8_bake_gen_bench d8_bake_gen)
+endif()
+
+# -------- Network Solver --------
+if (D8_BUILD_NET_SOLVER)
+  add_executable(d8_net_solver net_solver/net_solver.c)
+  target_link_libraries(d8_net_solver d8_core)
+endif()
+
+# -------- Agent CLI --------
+if (D8_BUILD_AGENT_CLI)
+  add_executable(d8_agent_cli agent_cli/agent_cli.c)
+  target_link_libraries(d8_agent_cli d8_core d8_bake_gen)
+  target_include_directories(d8_agent_cli PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/bake_gen)
 endif()
 
 # -------- Examples --------

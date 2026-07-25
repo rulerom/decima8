@@ -310,9 +310,16 @@ thr_cur16 = (i16)clamp_range(thr_tmp, -32768, 32767)
 
   has_signal = (delta_raw != 0)
   entered_by_decay = (decay16 > 0) && (in_range == true) && (in_range_before_decay == false)
-  locked_after = (BAKE_APPLIED==1) && in_range && (has_signal || entered_by_decay)
+  decay_only_fuse = (priority8 == 7)
+  locked_after = (BAKE_APPLIED==1) && in_range &&
+                 (decay_only_fuse ? entered_by_decay : (has_signal || entered_by_decay))
 
 Примечание: `thr_lo16 == thr_hi16` означает отключенный фьюз (в т.ч. базовый случай `0..0`) — такой тайл не защёлкивается.
+
+**Специальная семантика `priority8 == 7` (normative): decay-only fuse.**
+Такой тайл не имеет права защёлкнуться только потому, что входной поток поднял аккумулятор в диапазон `[thr_lo16..thr_hi16]`.
+Он защёлкивается только когда аккумулятор был вне диапазона до применения decay, а после decay вошёл в диапазон (`entered_by_decay==true`).
+Назначение режима: детекторы иссякания/разрядки/гидравлического анализа, где сильный поток должен сначала накопить давление выше рабочего коридора, а событие возникает при спадании потока.
 
 Если locked_before==1:
 
@@ -567,6 +574,8 @@ TileParamsV2 (13 bytes per tile):
 - pattern_id16 u16 (bytes 8-9)
 - flags8     u8  (=0 reserved) (byte 10)
 - reserved   u16 (=0) (bytes 11-12)
+
+`priority8 == 7` зарезервирован контрактом как `decay-only fuse` (см. 6.6). Для обычного winner-арбитража это всё ещё числовой приоритет 7, но его runtime-семантика фьюза отличается от остальных значений `priority8`.
 
 14.3 TLV_TILE_ROUTING_FLAGS16 (0x0131), len = tile_count * 2
 Per tile:
